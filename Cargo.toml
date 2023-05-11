@@ -20,6 +20,7 @@ polars = { version = "0.29.0", features = [
     "ipc",
     "parquet",
     "lazy",
+    "sql",
 ] }
 # Binary string helper
 bstr = "1.4.0"

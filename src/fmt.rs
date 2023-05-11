@@ -6,7 +6,7 @@ use tui::unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 use crate::{utils::BStrWidth, Ty};
 
 pub struct ColStat {
-    header_len: usize,
+    pub header_len: usize,
     max_lhs: usize,
     max_rhs: usize,
     is_str: bool,

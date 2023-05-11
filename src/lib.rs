@@ -106,7 +106,7 @@ impl App {
         let mut remaining_width = c.width() - id_len + 1;
         let mut cols = Vec::new();
         // Fill canvas with columns
-        while remaining_width > 0 {
+        while remaining_width > cols.len() {
             if let Some(off) = coll_off_iter.next() {
                 let idx = self.projection.project(off);
                 let col = &self.df.get_columns()[idx];
@@ -120,7 +120,7 @@ impl App {
                     },
                 );
                 stat.header(col.name());
-                let size = self.sizer.size(idx, stat.budget());
+                let size = self.sizer.size(idx,  stat.budget(), stat.header_len);
                 let allowed = size.min(remaining_width - cols.len());
                 remaining_width = remaining_width.saturating_sub(allowed);
                 cols.push((off, col.name(), fields, stat, allowed));
@@ -246,6 +246,7 @@ impl App {
                         KeyCode::Esc => {}
                         KeyCode::Char('r') => self.sizer.reset(),
                         KeyCode::Char('f') => self.sizer.fit(),
+                        KeyCode::Char(' ') => self.sizer.toggle(),
                         KeyCode::Left | KeyCode::Char('h') => self.sizer.cmd(col_idx, Cmd::Less),
                         KeyCode::Down | KeyCode::Char('j') => {
                             self.sizer.cmd(col_idx, Cmd::Constrain)
