@@ -7,3 +7,4 @@
 - Lazy preload
 - SQL files with multiple statements ? 
 - SQL shell 
+- Quit all 'Q'

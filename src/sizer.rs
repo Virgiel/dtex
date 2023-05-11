@@ -6,7 +6,7 @@ pub enum Cmd {
     More,
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug)]
 enum Constraint {
     Limit,
     Fit,
@@ -40,7 +40,7 @@ impl Sizer {
         self.get_size(idx)
     }
 
-    // Size the column based on its constraint
+    /// Size the column based on its constraint
     fn get_size(&self, idx: usize) -> usize {
         let (content, header, constraint) = self.cols[idx];
         match constraint {
@@ -49,19 +49,28 @@ impl Sizer {
             Constraint::Fit => content,
             Constraint::Fixe(size) => size,
         }
+        .max(self.min_size(idx))
+    }
+
+    /// Required size to display a column
+    fn min_size(&self, idx: usize) -> usize {
+        let (content, header, _) = self.cols[idx];
+        content.max(header).min(5)
     }
 
     /// Apply command
     pub fn cmd(&mut self, idx: usize, cmd: Cmd) {
-        if idx < self.cols.len() {
+        if idx >= self.cols.len() {
             return;
         }
         self.cols[idx].2 = match cmd {
             Cmd::Constrain => Constraint::Limit,
             Cmd::Free => Constraint::Fit,
-            Cmd::Less => Constraint::Fixe(self.get_size(idx).saturating_sub(1)),
+            Cmd::Less => {
+                Constraint::Fixe(self.get_size(idx).saturating_sub(1).max(self.min_size(idx)))
+            }
             Cmd::More => Constraint::Fixe(self.get_size(idx).saturating_add(1)),
-        }
+        };
     }
 
     /// Toggle constrain priority

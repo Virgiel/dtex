@@ -6,7 +6,6 @@ use tui::unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 use crate::{utils::BStrWidth, Ty};
 
 pub struct ColStat {
-    pub header_len: usize,
     max_lhs: usize,
     max_rhs: usize,
     is_str: bool,
@@ -15,15 +14,10 @@ pub struct ColStat {
 impl ColStat {
     pub fn new() -> Self {
         Self {
-            header_len: 0,
             max_lhs: 0,
             max_rhs: 0,
             is_str: false,
         }
-    }
-
-    pub fn header(&mut self, s: &str) {
-        self.header_len = s.width();
     }
 
     fn size_nb<NB: lexical_core::ToLexical>(&mut self, nb: NB) {
@@ -50,7 +44,7 @@ impl ColStat {
     }
 
     pub fn budget(&self) -> usize {
-        (self.max_lhs + self.max_rhs).max(self.header_len.min(5))
+        self.max_lhs + self.max_rhs
     }
 }
 

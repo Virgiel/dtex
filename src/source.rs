@@ -1,5 +1,4 @@
 use std::{
-    borrow::Cow,
     fs::File,
     io::{BufRead, BufReader},
     path::PathBuf,
@@ -57,15 +56,31 @@ impl Source {
         })
     }
 
-    pub fn display_path(&self) -> Cow<'_, str> {
+    pub fn name(&self) -> String {
         match self {
-            Self::Polars(_) => Cow::Borrowed("polars"),
+            Self::Polars(_) => "polars".to_string(),
             Self::Csv { path, .. }
             | Self::Json { path, .. }
             | Self::Avro(path)
             | Self::Parquet(path)
             | Self::Arrow(path)
-            | Self::SQL(path) => path.to_string_lossy(),
+            | Self::SQL(path) => path
+                .file_stem()
+                .unwrap_or_default()
+                .to_string_lossy()
+                .to_string(),
+        }
+    }
+
+    pub fn display_path(&self) -> Option<String> {
+        match self {
+            Self::Polars(_) => None,
+            Self::Csv { path, .. }
+            | Self::Json { path, .. }
+            | Self::Avro(path)
+            | Self::Parquet(path)
+            | Self::Arrow(path)
+            | Self::SQL(path) => Some(path.to_string_lossy().to_string()),
         }
     }
 
