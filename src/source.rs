@@ -5,7 +5,7 @@ use std::{
     path::PathBuf,
 };
 
-use polars::prelude::{DataFrame, JsonFormat, SerReader};
+use polars::prelude::{DataFrame, JsonFormat, LazyFrame, SerReader};
 
 use crate::Open;
 
@@ -15,9 +15,10 @@ pub enum Source {
     Polars(DataFrame),
     Csv { path: PathBuf, delimiter: u8 },
     Json { path: PathBuf, format: JsonFormat },
-    Avro { path: PathBuf },
-    Parquet { path: PathBuf },
-    Arrow { path: PathBuf },
+    Avro(PathBuf),
+    Parquet(PathBuf),
+    Arrow(PathBuf),
+    SQL(PathBuf),
 }
 
 impl Source {
@@ -44,9 +45,10 @@ impl Source {
                         path,
                         format: JsonFormat::JsonLines,
                     },
-                    "avro" => Self::Avro { path },
-                    "parquet" | "pqt" => Self::Parquet { path },
-                    "arrow" => Self::Arrow { path },
+                    "avro" => Self::Avro(path),
+                    "parquet" | "pqt" => Self::Parquet(path),
+                    "arrow" => Self::Arrow(path),
+                    "sql" => Self::SQL(path),
                     unsupported => {
                         return Err(format!("Unsupported file extension .{unsupported}").into())
                     }
@@ -60,9 +62,10 @@ impl Source {
             Self::Polars(_) => Cow::Borrowed("polars"),
             Self::Csv { path, .. }
             | Self::Json { path, .. }
-            | Self::Avro { path }
-            | Self::Parquet { path }
-            | Self::Arrow { path } => path.to_string_lossy(),
+            | Self::Avro(path)
+            | Self::Parquet(path)
+            | Self::Arrow(path)
+            | Self::SQL(path) => path.to_string_lossy(),
         }
     }
 
@@ -75,19 +78,19 @@ impl Source {
                 .with_n_rows(Some(PRELOAD_LEN))
                 .with_n_threads(Some(1))
                 .finish()?,
-            Self::Avro { path } => {
+            Self::Avro(path) => {
                 let file = std::fs::File::open(path)?;
                 polars::io::avro::AvroReader::new(file)
                     .with_n_rows(Some(PRELOAD_LEN))
                     .finish()?
             }
-            Self::Parquet { path } => {
+            Self::Parquet(path) => {
                 let file = std::fs::File::open(path)?;
                 polars::io::parquet::ParquetReader::new(file)
                     .with_n_rows(Some(PRELOAD_LEN))
                     .finish()?
             }
-            Self::Arrow { path } => {
+            Self::Arrow(path) => {
                 let file = std::fs::File::open(path)?;
                 polars::io::ipc::IpcReader::new(file)
                     .with_n_rows(Some(PRELOAD_LEN))
@@ -109,6 +112,19 @@ impl Source {
                         .finish()?
                 }
             },
+            Self::SQL(path) => {
+                let file = std::fs::File::open(path)?;
+                let mut file = BufReader::new(file);
+                let mut buf = Vec::new();
+                let mut ctx = polars::sql::SQLContext::new();
+                let mut lazy = LazyFrame::default();
+                while file.read_until(b';', &mut buf)? > 0 {
+                    let sql = std::str::from_utf8(&buf)?;
+                    std::mem::replace(&mut lazy, ctx.execute(sql)?);
+                    buf.clear();
+                }
+                lazy.limit(PRELOAD_LEN as u32).collect()?
+            }
         })
     }
 }
