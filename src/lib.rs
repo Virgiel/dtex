@@ -9,6 +9,7 @@ use sizer::{Cmd, Sizer};
 use source::Source;
 use tui::{
     crossterm::event::{self, Event, KeyCode, KeyModifiers},
+    unicode_width::UnicodeWidthStr,
     Canvas, Terminal,
 };
 
@@ -27,14 +28,11 @@ pub enum Open {
     File(PathBuf),
 }
 
-pub fn run(source: Open) {
-    let source = Source::new(source).unwrap();
-    let df = source.preload().unwrap();
-    launch(df, source)
-}
-
-fn launch(df: DataFrame, source: Source) {
-    let mut app = App::open(df, source);
+pub fn run(source: Vec<Open>) {
+    let mut app = App::new();
+    for source in source {
+        app.add_tab(Tab::open(Source::new(source).unwrap()));
+    }
     let mut redraw = true;
     let mut terminal = Terminal::new(io::stdout()).unwrap();
     loop {
@@ -62,32 +60,122 @@ fn launch(df: DataFrame, source: Source) {
     }
 }
 
-enum AppState {
+struct App {
+    tabs: Vec<Tab>,
+    nav: Nav,
+}
+impl App {
+    pub fn new() -> Self {
+        Self {
+            tabs: vec![],
+            nav: Nav::new(),
+        }
+    }
+
+    pub fn add_tab(&mut self, tab: Tab) {
+        self.tabs.push(tab);
+    }
+
+    pub fn draw(&mut self, c: &mut Canvas) {
+        if self.tabs.len() == 1 {
+            self.tabs[0].draw(c)
+        } else if !self.tabs.is_empty() {
+            let mut coll_off_iter = self.nav.col_iter(self.tabs.len());
+            let mut cols = Vec::new();
+            // Fill canvas with tabs name
+            let mut remaining_width = c.width();
+            while remaining_width > cols.len() {
+                if let Some(off) = coll_off_iter.next() {
+                    let tab = &self.tabs[off];
+                    remaining_width = remaining_width.saturating_sub(tab.name.width());
+                    cols.push((off, &tab.name));
+                } else {
+                    break;
+                }
+            }
+            cols.sort_unstable_by_key(|(i, _)| *i);
+            drop(coll_off_iter);
+            // Draw headers
+            let mut fmt_buf = String::new();
+            let mut line = c.top();
+            for (off, name) in &cols {
+                let style = if *off == self.nav.c_col {
+                    style::tab_selected()
+                } else {
+                    style::tab()
+                };
+
+                line.draw(
+                    format_args!(
+                        "{:}",
+                        rtrim(name, &mut fmt_buf, name.width().min(line.width())),
+                    ),
+                    style,
+                );
+                line.draw(" ", style::separator());
+            }
+            self.tabs[self.nav.c_col].draw(c)
+        } else {
+            c.top().draw("Empty", style::primary());
+        }
+    }
+
+    pub fn on_event(&mut self, event: Event) -> bool {
+        let mut pass = true;
+        if let Event::Key(event) = event {
+            if KeyCode::Tab == event.code {
+                self.nav.right();
+                pass = false;
+            } else if KeyCode::BackTab == event.code {
+                self.nav.left();
+                pass = false;
+            }
+        }
+        if pass {
+            if self.tabs.len() == 1 {
+                if self.tabs[0].on_event(event) {
+                    self.tabs.clear();
+                }
+            } else if let Some(tab) = self.tabs.get_mut(self.nav.c_col) {
+                if tab.on_event(event) {
+                    self.tabs.remove(self.nav.c_col);
+                }
+            }
+        }
+        self.tabs.is_empty()
+    }
+}
+
+enum State {
     Explore,
     Size,
     Projection,
 }
 
-struct App {
+struct Tab {
+    name: String,
     source: Source,
-    display_path: String,
+    display_path: Option<String>,
     df: DataFrame,
     nav: Nav,
     sizer: Sizer,
     projection: Projection,
-    state: AppState,
+    state: State,
 }
 
-impl App {
-    pub fn open(df: DataFrame, source: Source) -> Self {
+impl Tab {
+    pub fn open(source: Source) -> Self {
+        // TODO in background
+        let df = source.preload().unwrap();
         Self {
-            display_path: source.display_path().to_string(),
+            display_path: source.display_path(),
+            name: source.name(),
             source,
             df,
             sizer: Sizer::new(),
             projection: Projection::new(),
             nav: Nav::new(),
-            state: AppState::Explore,
+            state: State::Explore,
         }
     }
 
@@ -119,8 +207,7 @@ impl App {
                         (vec, stat)
                     },
                 );
-                stat.header(col.name());
-                let size = self.sizer.size(idx,  stat.budget(), stat.header_len);
+                let size = self.sizer.size(idx, stat.budget(), col.name().width());
                 let allowed = size.min(remaining_width - cols.len());
                 remaining_width = remaining_width.saturating_sub(allowed);
                 cols.push((off, col.name(), fields, stat, allowed));
@@ -180,9 +267,9 @@ impl App {
         // Draw status bar
         let mut l = c.btm();
         let (status, style) = match self.state {
-            AppState::Explore => ("  EX  ", style::state_default()),
-            AppState::Size => (" SIZE ", style::state_action()),
-            AppState::Projection => (" MOVE ", style::state_alternate()),
+            State::Explore => ("  EX  ", style::state_default()),
+            State::Size => (" SIZE ", style::state_action()),
+            State::Projection => (" MOVE ", style::state_alternate()),
         };
         l.draw(status, style);
         l.draw(" ", style::primary());
@@ -195,7 +282,9 @@ impl App {
             l.rdraw(name, style::primary());
             l.rdraw(" ", style::primary());
         }
-        l.draw(&self.display_path, style::progress());
+        if let Some(path) = &self.display_path {
+            l.draw(path, style::progress());
+        }
     }
 
     pub fn on_event(&mut self, event: Event) -> bool {
@@ -203,10 +292,10 @@ impl App {
             let shift = event.modifiers.contains(KeyModifiers::SHIFT);
             let off = self.nav.c_col;
             match self.state {
-                AppState::Explore => match event.code {
+                State::Explore => match event.code {
                     KeyCode::Char('q') => return true,
-                    KeyCode::Char('s') => self.state = AppState::Size,
-                    KeyCode::Char('m') => self.state = AppState::Projection,
+                    KeyCode::Char('s') => self.state = State::Size,
+                    KeyCode::Char('m') => self.state = State::Projection,
                     KeyCode::Char('g') => self.nav.top(),
                     KeyCode::Char('G') => self.nav.btm(),
                     KeyCode::Left | KeyCode::Char('H') if shift => self.nav.win_left(),
@@ -219,8 +308,8 @@ impl App {
                     KeyCode::Right | KeyCode::Char('l') => self.nav.right(),
                     _ => {}
                 },
-                AppState::Projection => match event.code {
-                    KeyCode::Char('q') | KeyCode::Esc => self.state = AppState::Explore,
+                State::Projection => match event.code {
+                    KeyCode::Char('q') | KeyCode::Esc => self.state = State::Explore,
                     KeyCode::Left | KeyCode::Char('H') if shift => {
                         self.projection.cmd(off, projection::Cmd::Left);
                         self.nav.left()
@@ -239,7 +328,7 @@ impl App {
                     KeyCode::Right | KeyCode::Char('l') => self.nav.right(),
                     _ => {}
                 },
-                AppState::Size => {
+                State::Size => {
                     let col_idx = self.nav.c_col;
                     let mut exit_size = true;
                     match event.code {
@@ -247,16 +336,22 @@ impl App {
                         KeyCode::Char('r') => self.sizer.reset(),
                         KeyCode::Char('f') => self.sizer.fit(),
                         KeyCode::Char(' ') => self.sizer.toggle(),
-                        KeyCode::Left | KeyCode::Char('h') => self.sizer.cmd(col_idx, Cmd::Less),
+                        KeyCode::Left | KeyCode::Char('h') => {
+                            self.sizer.cmd(col_idx, Cmd::Less);
+                            exit_size = false
+                        }
                         KeyCode::Down | KeyCode::Char('j') => {
                             self.sizer.cmd(col_idx, Cmd::Constrain)
                         }
                         KeyCode::Up | KeyCode::Char('k') => self.sizer.cmd(col_idx, Cmd::Free),
-                        KeyCode::Right | KeyCode::Char('l') => self.sizer.cmd(col_idx, Cmd::More),
+                        KeyCode::Right | KeyCode::Char('l') => {
+                            self.sizer.cmd(col_idx, Cmd::More);
+                            exit_size = false;
+                        }
                         _ => exit_size = false,
                     };
                     if exit_size {
-                        self.state = AppState::Explore
+                        self.state = State::Explore
                     }
                 }
             }

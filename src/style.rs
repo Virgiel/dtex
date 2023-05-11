@@ -31,3 +31,11 @@ pub fn state_default() -> Style {
 pub fn state_alternate() -> Style {
     none().bg(Color::Magenta).bold()
 }
+
+pub fn tab() -> Style {
+    none().bold()
+}
+
+pub fn tab_selected() -> Style {
+    none()
+}
