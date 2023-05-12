@@ -2262,10 +2262,10 @@ dependencies = [
 [[package]]
 name = "tui"
 version = "0.1.0"
-source = "git+https://github.com/Virgiel/tui#6daafec9c81577e9c3f17f3c58bcf2b96ffecb08"
+source = "git+https://github.com/Virgiel/tui#27a516999835ae2b10e339349f78aef96b25cca6"
 dependencies = [
  "bitflags",
- "crossterm 0.25.0",
+ "crossterm 0.26.1",
  "unicode-segmentation",
  "unicode-width",
 ]

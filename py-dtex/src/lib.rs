@@ -7,7 +7,7 @@ use pyo3_polars::PyDataFrame;
 #[pyfunction]
 fn ex(pydf: PyDataFrame) -> PyResult<()> {
     let df: DataFrame = pydf.into();
-    ::dtex::run(Open::Polars(df));
+    ::dtex::run(vec![Open::Polars(df)]);
     Ok(())
 }
 
