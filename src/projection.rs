@@ -48,7 +48,6 @@ impl Projection {
             Cmd::Left => self.cols.swap(off, off.saturating_sub(1)),
             Cmd::Right => self.cols.swap(off, off.saturating_add(1).min(len.saturating_sub(1))),
         }
-        eprintln!("{:?}", &self.cols);
     }
 
     /// Show all columns in their original position
