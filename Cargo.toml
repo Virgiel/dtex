@@ -32,6 +32,8 @@ chrono = "0.4.24"
 clap = { version = "4.2.2", features = ["derive"] }
 # Regular expression lib
 regex = "1.8.1"
+# Efficient oneshot channel
+oneshot = "0.1.5"
 
 [workspace]
 members = ["py-dtex", "node-dtex"]

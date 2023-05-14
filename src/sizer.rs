@@ -23,7 +23,7 @@ impl Sizer {
     pub fn new() -> Self {
         Self {
             cols: vec![],
-            fit_content: false,
+            fit_content: true,
         }
     }
 

@@ -1,14 +1,15 @@
-use std::{borrow::Cow, error::Error, io, path::PathBuf, time::Duration};
+use std::{borrow::Cow, io, path::PathBuf, time::Duration};
 
 use bstr::{BStr, BString};
 use fmt::rtrim;
 use nav::Nav;
-use polars::prelude::{AnyValue, DataFrame};
+use polars::prelude::{AnyValue, DataFrame, PolarsError};
 use source::Source;
 use tab::Tab;
 use tui::{
     crossterm::event::{self, Event, KeyCode},
-    Canvas, Terminal, unicode_width::UnicodeWidthStr,
+    unicode_width::UnicodeWidthStr,
+    Canvas, Terminal,
 };
 
 mod fmt;
@@ -20,7 +21,34 @@ mod style;
 mod tab;
 mod utils;
 
-type Result<T> = std::result::Result<T, Box<dyn Error>>;
+#[derive(Debug)]
+pub struct StrError(String);
+
+impl From<PolarsError> for StrError {
+    fn from(value: PolarsError) -> Self {
+        Self(value.to_string())
+    }
+}
+
+impl From<std::io::Error> for StrError {
+    fn from(value: std::io::Error) -> Self {
+        Self(value.to_string())
+    }
+}
+
+impl From<std::str::Utf8Error> for StrError {
+    fn from(value: std::str::Utf8Error) -> Self {
+        Self(value.to_string())
+    }
+}
+
+impl From<String> for StrError {
+    fn from(value: String) -> Self {
+        Self(value)
+    }
+}
+
+type Result<T> = std::result::Result<T, StrError>;
 
 pub enum Open {
     Polars(DataFrame),
@@ -36,7 +64,7 @@ pub fn run(source: Vec<Open>) {
     let mut terminal = Terminal::new(io::stdout()).unwrap();
     loop {
         // Check loading state before drawing to no skip completed task during drawing
-        let is_loading = false; //app.is_loading();
+        let is_loading = app.is_loading();
         if redraw {
             terminal.draw(|c| app.draw(c)).unwrap();
             redraw = false;
@@ -76,10 +104,10 @@ impl App {
     }
 
     pub fn draw(&mut self, c: &mut Canvas) {
+        let mut coll_off_iter = self.nav.col_iter(self.tabs.len());
         if self.tabs.len() == 1 {
             self.tabs[0].draw(c)
         } else if !self.tabs.is_empty() {
-            let mut coll_off_iter = self.nav.col_iter(self.tabs.len());
             let mut cols = Vec::new();
             // Fill canvas with tabs name
             let mut remaining_width = c.width();
@@ -142,6 +170,10 @@ impl App {
             }
         }
         self.tabs.is_empty()
+    }
+
+    fn is_loading(&self) -> bool {
+        self.tabs[self.nav.c_col].is_loading()
     }
 }
 pub enum Ty<'a> {

@@ -2,6 +2,7 @@ use std::{
     fs::File,
     io::{BufRead, BufReader},
     path::PathBuf,
+    sync::Arc,
 };
 
 use polars::prelude::{DataFrame, JsonFormat, LazyFrame, Schema, SerReader};
@@ -9,6 +10,93 @@ use polars::prelude::{DataFrame, JsonFormat, LazyFrame, Schema, SerReader};
 use crate::Open;
 
 const PRELOAD_LEN: usize = 1024;
+
+// TODO find a way to can polars loading
+
+pub struct LoadingTask {
+    receiver: oneshot::Receiver<crate::Result<DataFrame>>, // Receiver for the backend task
+    goal: Option<usize>,
+}
+
+pub struct Loader {
+    source: Arc<Source>,
+    task: Option<LoadingTask>,
+    pub df: DataFrame,
+    full: bool,
+    error: String,
+}
+
+impl Loader {
+    pub fn new(source: Source) -> Self {
+        let source = Arc::new(source);
+        let (df, full, task) = if let Some(df) = source.sync_full() {
+            (df, true, None)
+        } else {
+            let schema = source.sync_schema().ok().flatten().unwrap_or_default();
+            let df = DataFrame::from_rows_and_schema(&[], &schema).unwrap();
+            let task = {
+                let source = source.clone();
+                let (sender, receiver) = oneshot::channel();
+                std::thread::spawn(move || {
+                    let df = source.preload();
+                    sender.send(df).ok();
+                });
+                Some(LoadingTask {
+                    receiver,
+                    goal: Some(PRELOAD_LEN),
+                })
+            };
+            (df, false, task)
+        };
+        Self {
+            task,
+            df,
+            full,
+            source,
+            error: String::new(),
+        }
+    }
+
+    fn load(&mut self, goal: Option<usize>) {
+        // Skip loading if we already loaded, or are loading, a bigger data frame
+        if self.df.height().max(
+            self.task
+                .as_ref()
+                .map(|t| t.goal.unwrap_or(usize::MAX))
+                .unwrap_or(0),
+        ) >= goal.unwrap_or(usize::MAX)
+        {
+            return;
+        }
+    }
+
+    pub fn tick(&mut self) {
+        if let Some(task) = &self.task {
+            match task.receiver.try_recv() {
+                Ok(result) => {
+                    match result {
+                        Ok(df) => {
+                            self.full = df.height() < task.goal.unwrap_or(usize::MAX);
+                            self.df = df;
+                        }
+                        Err(err) => self.error = err.0,
+                    }
+                    self.task = None;
+                }
+                Err(it) => match it {
+                    oneshot::TryRecvError::Empty => {}
+                    oneshot::TryRecvError::Disconnected => {
+                        self.error = format!("Loader failed without error")
+                    }
+                },
+            }
+        }
+    }
+
+    pub fn is_loading(&self) -> bool {
+        self.task.is_some()
+    }
+}
 
 pub enum Source {
     Polars(DataFrame),
@@ -84,7 +172,8 @@ impl Source {
         }
     }
 
-    pub fn schema(&self) -> crate::Result<Option<Schema>> {
+    /// Fast load of the schema
+    fn sync_schema(&self) -> crate::Result<Option<Schema>> {
         match self {
             Source::Polars(p) => Ok(Some(p.schema())),
             Source::Csv { .. } | Source::Json { .. } | Source::SQL(_) => Ok(None),
@@ -103,6 +192,20 @@ impl Source {
         }
     }
 
+    /// Fast load of a in memory data frame
+    fn sync_full(&self) -> Option<DataFrame> {
+        match self {
+            Source::Polars(p) => Some(p.clone()),
+            Source::Csv { .. }
+            | Source::Json { .. }
+            | Source::SQL(_)
+            | Source::Avro(_)
+            | Source::Parquet(_)
+            | Source::Arrow(_) => None,
+        }
+    }
+
+    /// Reasonably fast preload
     pub fn preload(&self) -> crate::Result<DataFrame> {
         Ok(match self {
             Self::Polars(df) => df.clone(), // TODO whyyyyy
@@ -143,6 +246,64 @@ impl Source {
                         .infer_schema_len(Some(PRELOAD_LEN))
                         .with_n_rows(Some(PRELOAD_LEN))
                         .with_n_threads(Some(1))
+                        .finish()?
+                }
+            },
+            Self::SQL(path) => {
+                let file = std::fs::File::open(path)?;
+                let mut file = BufReader::new(file);
+                let mut buf = Vec::new();
+                let mut ctx = polars::sql::SQLContext::new();
+                let mut lazy = LazyFrame::default();
+                while file.read_until(b';', &mut buf)? > 0 {
+                    let sql = std::str::from_utf8(&buf)?;
+                    std::mem::replace(&mut lazy, ctx.execute(sql)?);
+                    buf.clear();
+                }
+                lazy.limit(PRELOAD_LEN as u32).collect()?
+            }
+        })
+    }
+
+    /// Reasonably fast preload
+    pub fn load(&self, goal: Option<usize>) -> crate::Result<DataFrame> {
+        Ok(match self {
+            Self::Polars(df) => df.clone(),
+            Self::Csv { path, delimiter } => polars::io::csv::CsvReader::from_path(&path)?
+                .with_delimiter(*delimiter)
+                .infer_schema(Some(PRELOAD_LEN))
+                .with_n_rows(goal)
+                .finish()?,
+            Self::Avro(path) => {
+                let file = std::fs::File::open(path)?;
+                polars::io::avro::AvroReader::new(file)
+                    .with_n_rows(goal)
+                    .finish()?
+            }
+            Self::Parquet(path) => {
+                let file = std::fs::File::open(path)?;
+                polars::io::parquet::ParquetReader::new(file)
+                    .with_n_rows(goal)
+                    .finish()?
+            }
+            Self::Arrow(path) => {
+                let file = std::fs::File::open(path)?;
+                polars::io::ipc::IpcReader::new(file)
+                    .with_n_rows(goal)
+                    .finish()?
+            }
+            Self::Json { path, format } => match format {
+                JsonFormat::Json => {
+                    let file = std::fs::File::open(path)?;
+                    polars::io::json::JsonReader::new(file)
+                        .with_json_format(JsonFormat::Json)
+                        .infer_schema_len(Some(PRELOAD_LEN))
+                        .finish()?
+                }
+                JsonFormat::JsonLines => {
+                    polars::io::ndjson_core::ndjson::JsonLineReader::from_path(path)?
+                        .infer_schema_len(Some(PRELOAD_LEN))
+                        .with_n_rows(goal)
                         .finish()?
                 }
             },
