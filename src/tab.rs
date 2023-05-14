@@ -45,7 +45,6 @@ impl Tab {
     }
 
     pub fn draw(&mut self, c: &mut Canvas) {
-        c.bg(style::BG_1);
         let nb_col = self.df.get_columns().len();
         let nb_row = self.df.height();
         self.projection.set_nb_cols(nb_col);
@@ -127,7 +126,6 @@ impl Tab {
         }
 
         // Draw rows
-        c.bg(style::BG_DIM);
         for r in 0..v_row.min(nb_row - row_off) {
             let style = if r == self.nav.c_row - self.nav.o_row {
                 style::selected()
