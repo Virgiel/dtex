@@ -4,7 +4,7 @@ use std::{
     path::PathBuf,
 };
 
-use polars::prelude::{DataFrame, JsonFormat, LazyFrame, SerReader};
+use polars::prelude::{DataFrame, JsonFormat, LazyFrame, Schema, SerReader};
 
 use crate::Open;
 
@@ -81,6 +81,25 @@ impl Source {
             | Self::Parquet(path)
             | Self::Arrow(path)
             | Self::SQL(path) => Some(path.to_string_lossy().to_string()),
+        }
+    }
+
+    pub fn schema(&self) -> crate::Result<Option<Schema>> {
+        match self {
+            Source::Polars(p) => Ok(Some(p.schema())),
+            Source::Csv { .. } | Source::Json { .. } | Source::SQL(_) => Ok(None),
+            Source::Avro(p) => {
+                let fs = std::fs::File::open(p)?;
+                Ok(Some(polars::io::avro::AvroReader::new(fs).schema()?))
+            }
+            Source::Parquet(p) => {
+                let fs = std::fs::File::open(p)?;
+                Ok(Some(polars::io::parquet::ParquetReader::new(fs).schema()?))
+            }
+            Source::Arrow(p) => {
+                let fs = std::fs::File::open(p)?;
+                Ok(Some(polars::io::ipc::IpcReader::new(fs).schema()?))
+            }
         }
     }
 

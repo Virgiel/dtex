@@ -1,0 +1,15 @@
+[package]
+name = "node-dtex"
+version = "0.0.0"
+edition = "2021"
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+napi = "2"
+napi-derive = "2"
+dtex = { path = ".." }
+
+[build-dependencies]
+napi-build = "2"

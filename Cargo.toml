@@ -34,4 +34,4 @@ clap = { version = "4.2.2", features = ["derive"] }
 regex = "1.8.1"
 
 [workspace]
-members = ["py-dtex"]
+members = ["py-dtex", "node-dtex"]
