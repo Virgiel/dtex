@@ -3,6 +3,8 @@ use std::{
     thread::{Builder, Thread},
 };
 
+use notify::RecommendedWatcher;
+
 /// Task orchestrator that generate event on task completion
 #[derive(Clone)]
 pub struct Orchestrator(Thread);
@@ -28,12 +30,14 @@ impl Orchestrator {
 
 pub enum Event {
     Term(tui::crossterm::event::Event),
+    File(notify::Event),
     Task,
 }
 
 /// Create a channel to receive all the event and a task orchestrator
-pub fn event_listener() -> (Receiver<Event>, Orchestrator) {
+pub fn event_listener() -> (Receiver<Event>, RecommendedWatcher, Orchestrator) {
     let (sender, receiver) = sync_channel(100);
+    // Task completion listener
     let waker = {
         let sender = sender.clone();
         Builder::new()
@@ -43,20 +47,31 @@ pub fn event_listener() -> (Receiver<Event>, Orchestrator) {
                 // No need to insist if there is already other event in the queue
                 sender.try_send(Event::Task).ok();
             })
-            .unwrap()
+            .expect("Failed to start task_listener thread")
             .thread()
             .clone()
     };
+    // File system event
+    let watcher = {
+        let sender = sender.clone();
+        notify::recommended_watcher(move |res: notify::Result<notify::Event>| {
+            let event = res.expect("Failed to receive file system event");
+            sender.send(Event::File(event)).expect("Failed to send file system event")
+        })
+        .expect("Failed to start file system watcher")
+    };
+    // Term event listener
     Builder::new()
         .name("term_listener".into())
         .spawn(move || loop {
             match tui::crossterm::event::read() {
                 Ok(event) => {
-                    sender.send(Event::Term(event)).unwrap();
+                    sender.send(Event::Term(event)).expect("Failed to send terminal event");
                 }
                 Err(err) => panic!("{err}"),
             }
         })
-        .unwrap();
-    (receiver, Orchestrator(waker))
+        .expect("Failed to start term_listener thread");
+
+    (receiver, watcher, Orchestrator(waker))
 }

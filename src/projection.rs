@@ -21,6 +21,7 @@ impl Projection {
 
     /// Sync the number of columns
     pub fn set_nb_cols(&mut self, nb_col: usize) {
+        self.cols.retain(|n| *n < nb_col);
         self.cols.extend(self.nb_col..nb_col);
         self.nb_col = nb_col;
     }
@@ -46,7 +47,9 @@ impl Projection {
                 self.cols.remove(off);
             }
             Cmd::Left => self.cols.swap(off, off.saturating_sub(1)),
-            Cmd::Right => self.cols.swap(off, off.saturating_add(1).min(len.saturating_sub(1))),
+            Cmd::Right => self
+                .cols
+                .swap(off, off.saturating_add(1).min(len.saturating_sub(1))),
         }
     }
 

@@ -35,6 +35,9 @@ regex = "1.8.1"
 oneshot = "0.1.5"
 # Lazy values
 once_cell = "1.17.1"
+# File system watcher
+notify = "5.1.0"
+notify-debouncer-mini = "0.2.1"
 
 [workspace]
 members = ["py-dtex", "node-dtex"]
