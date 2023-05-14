@@ -1,13 +1,12 @@
-use polars::prelude::DataFrame;
 use reedline::{KeyCode, KeyModifiers};
-use tui::{crossterm::event::Event, Canvas, unicode_width::UnicodeWidthStr};
+use tui::{crossterm::event::Event, unicode_width::UnicodeWidthStr, Canvas};
 
 use crate::{
     fmt::{self, rtrim, ColStat},
     nav::Nav,
     projection::{self, Projection},
     sizer::{self, Sizer},
-    source::Source,
+    source::{Loader, Source},
     style, to_ty,
 };
 
@@ -19,9 +18,8 @@ enum State {
 
 pub struct Tab {
     pub name: String,
-    source: Source,
+    loader: Loader,
     display_path: Option<String>,
-    df: DataFrame,
     nav: Nav,
     sizer: Sizer,
     projection: Projection,
@@ -30,13 +28,10 @@ pub struct Tab {
 
 impl Tab {
     pub fn open(source: Source) -> Self {
-        // TODO in background
-        let df = source.preload().unwrap();
         Self {
             display_path: source.display_path(),
             name: source.name(),
-            source,
-            df,
+            loader: Loader::new(source),
             sizer: Sizer::new(),
             projection: Projection::new(),
             nav: Nav::new(),
@@ -45,8 +40,9 @@ impl Tab {
     }
 
     pub fn draw(&mut self, c: &mut Canvas) {
-        let nb_col = self.df.get_columns().len();
-        let nb_row = self.df.height();
+        self.loader.tick();
+        let nb_col = self.loader.df.get_columns().len();
+        let nb_row = self.loader.df.height();
         self.projection.set_nb_cols(nb_col);
         let visible_cols = self.projection.nb_cols();
 
@@ -62,7 +58,7 @@ impl Tab {
         while remaining_width > cols.len() {
             if let Some(off) = coll_off_iter.next() {
                 let idx = self.projection.project(off);
-                let col = &self.df.get_columns()[idx];
+                let col = &self.loader.df.get_columns()[idx];
                 let (fields, stat) = col.phys_iter().skip(row_off).take(v_row).fold(
                     (Vec::new(), ColStat::new()),
                     |(mut vec, mut stat), value| {
@@ -97,7 +93,7 @@ impl Tab {
         l.rdraw(format_args!(" {progress:>3}%"), style::primary());
 
         if visible_cols > 0 {
-            let name = self.df.get_columns()[self.nav.c_col].name();
+            let name = self.loader.df.get_columns()[self.nav.c_col].name();
             l.rdraw(name, style::primary());
             l.rdraw(" ", style::primary());
         }
@@ -220,5 +216,9 @@ impl Tab {
             }
         }
         false
+    }
+
+    pub fn is_loading(&self) -> bool {
+        self.loader.is_loading()
     }
 }

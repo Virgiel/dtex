@@ -17,7 +17,7 @@ pub fn selected() -> Style {
 }
 
 pub fn separator() -> Style {
-    none().fg(Color::DarkGrey)
+    none().fg(Color::DarkGrey).dim()
 }
 
 pub fn state_action() -> Style {
