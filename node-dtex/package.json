@@ -1,0 +1,15 @@
+{
+  "name": "dtex",
+  "main": "dist/index.node",
+  "devDependencies": {
+    "@napi-rs/cli": "^2.15.2"
+  },
+  "scripts": {
+    "build": "napi build --release dist"
+  },
+  "optionalDependencies": {
+    "dtex-win32-x64-msvc": "undefined",
+    "dtex-darwin-x64": "undefined",
+    "dtex-linux-x64-gnu": "undefined"
+  }
+}
