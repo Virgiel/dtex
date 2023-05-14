@@ -1,17 +1,20 @@
 use std::{borrow::Cow, io, path::PathBuf, time::Duration};
 
 use bstr::{BStr, BString};
+use event::event_listener;
 use fmt::rtrim;
 use nav::Nav;
-use polars::prelude::{AnyValue, DataFrame, PolarsError};
+use polars::prelude::{AnyValue, DataFrame};
 use source::Source;
 use tab::Tab;
 use tui::{
-    crossterm::event::{self, Event, KeyCode},
+    crossterm::event::{Event, KeyCode},
     unicode_width::UnicodeWidthStr,
     Canvas, Terminal,
 };
 
+mod error;
+mod event;
 mod fmt;
 mod nav;
 mod projection;
@@ -21,68 +24,43 @@ mod style;
 mod tab;
 mod utils;
 
-#[derive(Debug)]
-pub struct StrError(String);
-
-impl From<PolarsError> for StrError {
-    fn from(value: PolarsError) -> Self {
-        Self(value.to_string())
-    }
-}
-
-impl From<std::io::Error> for StrError {
-    fn from(value: std::io::Error) -> Self {
-        Self(value.to_string())
-    }
-}
-
-impl From<std::str::Utf8Error> for StrError {
-    fn from(value: std::str::Utf8Error) -> Self {
-        Self(value.to_string())
-    }
-}
-
-impl From<String> for StrError {
-    fn from(value: String) -> Self {
-        Self(value)
-    }
-}
-
-type Result<T> = std::result::Result<T, StrError>;
-
 pub enum Open {
     Polars(DataFrame),
     File(PathBuf),
 }
 
 pub fn run(source: Vec<Open>) {
+    let (receiver, orchestrator) = event_listener();
     let mut app = App::new();
     for source in source {
-        app.add_tab(Tab::open(Source::new(source).unwrap()));
+        app.add_tab(Tab::open(
+            orchestrator.clone(),
+            Source::new(source).unwrap(),
+        ));
     }
-    let mut redraw = true;
     let mut terminal = Terminal::new(io::stdout()).unwrap();
     loop {
-        // Check loading state before drawing to no skip completed task during drawing
-        let is_loading = app.is_loading();
-        if redraw {
-            terminal.draw(|c| app.draw(c)).unwrap();
-            redraw = false;
-        }
-        if event::poll(Duration::from_millis(250)).unwrap() {
-            loop {
-                if app.on_event(event::read().unwrap()) {
-                    return;
+        terminal.draw(|c| app.draw(c)).unwrap();
+        let mut event = if app.is_loading() {
+            receiver.recv_timeout(Duration::from_millis(2500)).unwrap()
+        } else {
+            receiver.recv().unwrap()
+        };
+        loop {
+            match event {
+                event::Event::Term(ref e) => {
+                    if app.on_event(e) {
+                        return;
+                    }
                 }
-                // Ingest more event before drawing if we can
-                if !event::poll(Duration::from_millis(0)).unwrap() {
-                    break;
-                }
+                event::Event::Task => {}
             }
-            redraw = true;
-        }
-        if is_loading {
-            redraw = true;
+            // Ingest more event before drawing if we can
+            if let Ok(more) = receiver.try_recv() {
+                event = more;
+            } else {
+                break;
+            }
         }
     }
 }
@@ -147,7 +125,7 @@ impl App {
         }
     }
 
-    pub fn on_event(&mut self, event: Event) -> bool {
+    pub fn on_event(&mut self, event: &Event) -> bool {
         let mut pass = true;
         if let Event::Key(event) = event {
             if KeyCode::Tab == event.code {

@@ -2,6 +2,7 @@ use reedline::{KeyCode, KeyModifiers};
 use tui::{crossterm::event::Event, unicode_width::UnicodeWidthStr, Canvas};
 
 use crate::{
+    event::Orchestrator,
     fmt::{self, rtrim, ColStat},
     nav::Nav,
     projection::{self, Projection},
@@ -18,6 +19,7 @@ enum State {
 
 pub struct Tab {
     pub name: String,
+    orchestrator: Orchestrator,
     loader: Loader,
     display_path: Option<String>,
     nav: Nav,
@@ -27,15 +29,16 @@ pub struct Tab {
 }
 
 impl Tab {
-    pub fn open(source: Source) -> Self {
+    pub fn open(orchestrator: Orchestrator, source: Source) -> Self {
         Self {
             display_path: source.display_path(),
             name: source.name(),
-            loader: Loader::new(source),
+            loader: Loader::new(source, &orchestrator),
             sizer: Sizer::new(),
             projection: Projection::new(),
             nav: Nav::new(),
             state: State::Explore,
+            orchestrator,
         }
     }
 
@@ -88,7 +91,9 @@ impl Tab {
         };
         l.draw(status, style);
         l.draw(" ", style::primary());
-
+        if self.is_loading() {
+            l.rdraw("loading...", style::progress());
+        }
         let progress = ((self.nav.c_row + 1) * 100) / nb_row.max(1);
         l.rdraw(format_args!(" {progress:>3}%"), style::primary());
 
@@ -99,6 +104,12 @@ impl Tab {
         }
         if let Some(path) = &self.display_path {
             l.draw(path, style::progress());
+        }
+
+        // Draw error bar
+        if !self.loader.error.is_empty() {
+            let mut l = c.btm();
+            l.draw(&self.loader.error, style::error());
         }
 
         let fmt_buf = &mut String::with_capacity(256);
@@ -136,7 +147,7 @@ impl Tab {
             for (_, _, fields, stat, budget) in &cols {
                 let ty = &fields[r];
                 line.draw(
-                    format_args!("{}", fmt::fmt_field(fmt_buf, &ty, stat, *budget)),
+                    format_args!("{}", fmt::fmt_field(fmt_buf, ty, stat, *budget)),
                     style,
                 );
                 line.draw("│", style::separator());
@@ -144,7 +155,7 @@ impl Tab {
         }
     }
 
-    pub fn on_event(&mut self, event: Event) -> bool {
+    pub fn on_event(&mut self, event: &Event) -> bool {
         if let Event::Key(event) = event {
             let shift = event.modifiers.contains(KeyModifiers::SHIFT);
             let off = self.nav.c_col;
@@ -155,6 +166,7 @@ impl Tab {
                     KeyCode::Char('m') => self.state = State::Projection,
                     KeyCode::Char('g') => self.nav.top(),
                     KeyCode::Char('G') => self.nav.btm(),
+                    KeyCode::Char('a') => self.loader.load(None, &self.orchestrator),
                     KeyCode::Left | KeyCode::Char('H') if shift => self.nav.win_left(),
                     KeyCode::Down | KeyCode::Char('J') if shift => self.nav.win_down(),
                     KeyCode::Up | KeyCode::Char('K') if shift => self.nav.win_up(),

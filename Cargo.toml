@@ -16,7 +16,6 @@ tempfile = "3.5.0"
 polars = { version = "0.29.0", features = [
     "performant",
     "json",
-    "avro",
     "ipc",
     "parquet",
     "lazy",
@@ -34,6 +33,8 @@ clap = { version = "4.2.2", features = ["derive"] }
 regex = "1.8.1"
 # Efficient oneshot channel
 oneshot = "0.1.5"
+# Lazy values
+once_cell = "1.17.1"
 
 [workspace]
 members = ["py-dtex", "node-dtex"]

@@ -14,3 +14,12 @@ impl BStrWidth for BStr {
             .fold(0, Add::add)
     }
 }
+
+macro_rules! cache_regex {
+    ($re:literal $(,)?) => {{
+        static RE: once_cell::sync::OnceCell<regex::Regex> = once_cell::sync::OnceCell::new();
+        RE.get_or_init(|| regex::Regex::new($re).unwrap())
+    }};
+}
+
+pub(crate) use cache_regex;

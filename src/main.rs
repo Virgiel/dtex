@@ -12,5 +12,5 @@ pub struct Args {
 
 fn main() {
     let args = Args::parse();
-    dtex::run(args.files.into_iter().map(|f| dtex::Open::File(f)).collect());
+    dtex::run(args.files.into_iter().map(dtex::Open::File).collect());
 }
