@@ -47,7 +47,7 @@ impl Nav {
         if self.c_col == 0 {
             self.c_col = self.m_col;
         } else {
-            self.c_col = self.c_col - 1;
+            self.c_col -= 1;
         }
     }
 
@@ -55,7 +55,7 @@ impl Nav {
         if self.c_col == self.m_col {
             self.c_col = 0
         } else {
-            self.c_col = self.c_col + 1;
+            self.c_col += 1;
         }
     }
 

@@ -39,3 +39,7 @@ pub fn tab() -> Style {
 pub fn tab_selected() -> Style {
     none().bold()
 }
+
+pub(crate) fn error() -> Style {
+    none().fg(Color::Red).bold()
+}

@@ -5,16 +5,17 @@ use std::{
     sync::Arc,
 };
 
-use polars::prelude::{DataFrame, JsonFormat, LazyFrame, Schema, SerReader};
+use polars::prelude::{
+    DataFrame, IntoLazy, LazyCsvReader, LazyFileListReader, LazyFrame, LazyJsonLineReader,
+    ScanArgsIpc, ScanArgsParquet, Schema, SerReader,
+};
 
-use crate::Open;
+use crate::{error::Result, event::Orchestrator, utils::cache_regex, Open};
 
 const PRELOAD_LEN: usize = 1024;
 
-// TODO find a way to can polars loading
-
 pub struct LoadingTask {
-    receiver: oneshot::Receiver<crate::Result<DataFrame>>, // Receiver for the backend task
+    receiver: oneshot::Receiver<Result<DataFrame>>, // Receiver for the backend task
     goal: Option<usize>,
 }
 
@@ -23,11 +24,11 @@ pub struct Loader {
     task: Option<LoadingTask>,
     pub df: DataFrame,
     full: bool,
-    error: String,
+    pub error: String,
 }
 
 impl Loader {
-    pub fn new(source: Source) -> Self {
+    pub fn new(source: Source, orchestrator: &Orchestrator) -> Self {
         let source = Arc::new(source);
         let (df, full, task) = if let Some(df) = source.sync_full() {
             (df, true, None)
@@ -36,11 +37,7 @@ impl Loader {
             let df = DataFrame::from_rows_and_schema(&[], &schema).unwrap();
             let task = {
                 let source = source.clone();
-                let (sender, receiver) = oneshot::channel();
-                std::thread::spawn(move || {
-                    let df = source.preload();
-                    sender.send(df).ok();
-                });
+                let receiver = orchestrator.task(move || source.load(Some(PRELOAD_LEN)));
                 Some(LoadingTask {
                     receiver,
                     goal: Some(PRELOAD_LEN),
@@ -57,7 +54,7 @@ impl Loader {
         }
     }
 
-    fn load(&mut self, goal: Option<usize>) {
+    pub fn load(&mut self, goal: Option<usize>, orchestrator: &Orchestrator) {
         // Skip loading if we already loaded, or are loading, a bigger data frame
         if self.df.height().max(
             self.task
@@ -68,6 +65,12 @@ impl Loader {
         {
             return;
         }
+        // Start background loading task
+        let source = self.source.clone();
+        self.task = Some(LoadingTask {
+            receiver: orchestrator.task(move || source.load(goal)),
+            goal,
+        })
     }
 
     pub fn tick(&mut self) {
@@ -101,15 +104,14 @@ impl Loader {
 pub enum Source {
     Polars(DataFrame),
     Csv { path: PathBuf, delimiter: u8 },
-    Json { path: PathBuf, format: JsonFormat },
-    Avro(PathBuf),
+    Json(PathBuf),
     Parquet(PathBuf),
     Arrow(PathBuf),
     SQL(PathBuf),
 }
 
 impl Source {
-    pub fn new(open: Open) -> crate::Result<Source> {
+    pub fn new(open: Open) -> Result<Source> {
         Ok(match open {
             Open::Polars(df) => Self::Polars(df),
             Open::File(path) => {
@@ -124,15 +126,7 @@ impl Source {
                         let delimiter = infer_cdv_delimiter(&mut file).unwrap();
                         Self::Csv { path, delimiter }
                     }
-                    "json" => Self::Json {
-                        path,
-                        format: JsonFormat::Json,
-                    },
-                    "ndjson" | "jsonl" | "ldjson" | "ldj" => Self::Json {
-                        path,
-                        format: JsonFormat::JsonLines,
-                    },
-                    "avro" => Self::Avro(path),
+                    "json" | "ndjson" | "jsonl" | "ldjson" | "ldj" => Self::Json(path),
                     "parquet" | "pqt" => Self::Parquet(path),
                     "arrow" => Self::Arrow(path),
                     "sql" => Self::SQL(path),
@@ -148,8 +142,7 @@ impl Source {
         match self {
             Self::Polars(_) => "polars".to_string(),
             Self::Csv { path, .. }
-            | Self::Json { path, .. }
-            | Self::Avro(path)
+            | Self::Json(path)
             | Self::Parquet(path)
             | Self::Arrow(path)
             | Self::SQL(path) => path
@@ -164,8 +157,7 @@ impl Source {
         match self {
             Self::Polars(_) => None,
             Self::Csv { path, .. }
-            | Self::Json { path, .. }
-            | Self::Avro(path)
+            | Self::Json(path)
             | Self::Parquet(path)
             | Self::Arrow(path)
             | Self::SQL(path) => Some(path.to_string_lossy().to_string()),
@@ -173,14 +165,10 @@ impl Source {
     }
 
     /// Fast load of the schema
-    fn sync_schema(&self) -> crate::Result<Option<Schema>> {
+    fn sync_schema(&self) -> Result<Option<Schema>> {
         match self {
             Source::Polars(p) => Ok(Some(p.schema())),
             Source::Csv { .. } | Source::Json { .. } | Source::SQL(_) => Ok(None),
-            Source::Avro(p) => {
-                let fs = std::fs::File::open(p)?;
-                Ok(Some(polars::io::avro::AvroReader::new(fs).schema()?))
-            }
             Source::Parquet(p) => {
                 let fs = std::fs::File::open(p)?;
                 Ok(Some(polars::io::parquet::ParquetReader::new(fs).schema()?))
@@ -199,126 +187,54 @@ impl Source {
             Source::Csv { .. }
             | Source::Json { .. }
             | Source::SQL(_)
-            | Source::Avro(_)
             | Source::Parquet(_)
             | Source::Arrow(_) => None,
         }
     }
 
-    /// Reasonably fast preload
-    pub fn preload(&self) -> crate::Result<DataFrame> {
-        Ok(match self {
-            Self::Polars(df) => df.clone(), // TODO whyyyyy
-            Self::Csv { path, delimiter } => polars::io::csv::CsvReader::from_path(&path)?
-                .with_delimiter(*delimiter)
-                .infer_schema(Some(PRELOAD_LEN))
-                .with_n_rows(Some(PRELOAD_LEN))
-                .with_n_threads(Some(1))
-                .finish()?,
-            Self::Avro(path) => {
-                let file = std::fs::File::open(path)?;
-                polars::io::avro::AvroReader::new(file)
-                    .with_n_rows(Some(PRELOAD_LEN))
-                    .finish()?
-            }
-            Self::Parquet(path) => {
-                let file = std::fs::File::open(path)?;
-                polars::io::parquet::ParquetReader::new(file)
-                    .with_n_rows(Some(PRELOAD_LEN))
-                    .finish()?
-            }
-            Self::Arrow(path) => {
-                let file = std::fs::File::open(path)?;
-                polars::io::ipc::IpcReader::new(file)
-                    .with_n_rows(Some(PRELOAD_LEN))
-                    .finish()?
-            }
-            Self::Json { path, format } => match format {
-                JsonFormat::Json => {
-                    let file = std::fs::File::open(path)?;
-                    polars::io::json::JsonReader::new(file)
-                        .with_json_format(JsonFormat::Json)
-                        .infer_schema_len(Some(PRELOAD_LEN))
-                        .finish()?
+    /// Load up to `limit` rows handling schema errors
+    fn load(&self, limit: Option<usize>) -> Result<DataFrame> {
+        let mut schema = Schema::new();
+        loop {
+            let lazy = self.lazy_frame(&schema)?;
+            let result = lazy
+                .limit(limit.map(|n| n as u32).unwrap_or(u32::MAX))
+                .collect();
+            match result {
+                Ok(df) => return Ok(df),
+                Err(err) => {
+                    let str = err.to_string();
+                    let reg = cache_regex!("Could not parse `.*` as dtype `.*` at column '(.*)'");
+                    if let Some(ma) = reg.captures(&str) {
+                        schema.with_column(
+                            ma.get(1).unwrap().as_str().into(),
+                            polars::prelude::DataType::Utf8,
+                        );
+                    } else {
+                        return Err(err.into());
+                    }
                 }
-                JsonFormat::JsonLines => {
-                    polars::io::ndjson_core::ndjson::JsonLineReader::from_path(path)?
-                        .infer_schema_len(Some(PRELOAD_LEN))
-                        .with_n_rows(Some(PRELOAD_LEN))
-                        .with_n_threads(Some(1))
-                        .finish()?
-                }
-            },
-            Self::SQL(path) => {
-                let file = std::fs::File::open(path)?;
-                let mut file = BufReader::new(file);
-                let mut buf = Vec::new();
-                let mut ctx = polars::sql::SQLContext::new();
-                let mut lazy = LazyFrame::default();
-                while file.read_until(b';', &mut buf)? > 0 {
-                    let sql = std::str::from_utf8(&buf)?;
-                    std::mem::replace(&mut lazy, ctx.execute(sql)?);
-                    buf.clear();
-                }
-                lazy.limit(PRELOAD_LEN as u32).collect()?
             }
-        })
+        }
     }
 
-    /// Reasonably fast preload
-    pub fn load(&self, goal: Option<usize>) -> crate::Result<DataFrame> {
+    /// Lazy frame from source
+    fn lazy_frame(&self, schema: &Schema) -> Result<LazyFrame> {
         Ok(match self {
-            Self::Polars(df) => df.clone(),
-            Self::Csv { path, delimiter } => polars::io::csv::CsvReader::from_path(&path)?
+            Self::Polars(df) => df.clone().lazy(),
+            Self::Csv { path, delimiter } => LazyCsvReader::new(path)
+                .with_dtype_overwrite(Some(schema))
                 .with_delimiter(*delimiter)
-                .infer_schema(Some(PRELOAD_LEN))
-                .with_n_rows(goal)
                 .finish()?,
-            Self::Avro(path) => {
-                let file = std::fs::File::open(path)?;
-                polars::io::avro::AvroReader::new(file)
-                    .with_n_rows(goal)
-                    .finish()?
+            Self::Parquet(path) => LazyFrame::scan_parquet(path, ScanArgsParquet::default())?,
+            Self::Arrow(path) => LazyFrame::scan_ipc(path, ScanArgsIpc::default())?,
+            Self::Json(path) => {
+                LazyJsonLineReader::new(path.to_string_lossy().to_string()).finish()?
             }
-            Self::Parquet(path) => {
-                let file = std::fs::File::open(path)?;
-                polars::io::parquet::ParquetReader::new(file)
-                    .with_n_rows(goal)
-                    .finish()?
-            }
-            Self::Arrow(path) => {
-                let file = std::fs::File::open(path)?;
-                polars::io::ipc::IpcReader::new(file)
-                    .with_n_rows(goal)
-                    .finish()?
-            }
-            Self::Json { path, format } => match format {
-                JsonFormat::Json => {
-                    let file = std::fs::File::open(path)?;
-                    polars::io::json::JsonReader::new(file)
-                        .with_json_format(JsonFormat::Json)
-                        .infer_schema_len(Some(PRELOAD_LEN))
-                        .finish()?
-                }
-                JsonFormat::JsonLines => {
-                    polars::io::ndjson_core::ndjson::JsonLineReader::from_path(path)?
-                        .infer_schema_len(Some(PRELOAD_LEN))
-                        .with_n_rows(goal)
-                        .finish()?
-                }
-            },
             Self::SQL(path) => {
-                let file = std::fs::File::open(path)?;
-                let mut file = BufReader::new(file);
-                let mut buf = Vec::new();
+                let sql = std::fs::read_to_string(path)?;
                 let mut ctx = polars::sql::SQLContext::new();
-                let mut lazy = LazyFrame::default();
-                while file.read_until(b';', &mut buf)? > 0 {
-                    let sql = std::str::from_utf8(&buf)?;
-                    std::mem::replace(&mut lazy, ctx.execute(sql)?);
-                    buf.clear();
-                }
-                lazy.limit(PRELOAD_LEN as u32).collect()?
+                ctx.execute(&sql)?
             }
         })
     }
@@ -355,28 +271,3 @@ fn infer_cdv_delimiter(file: &mut File) -> std::io::Result<u8> {
         .map(|(_, d)| d)
         .unwrap_or(DELIMITER[0]))
 }
-
-/*let mut schema = Schema::new();
-let dfg = loop {
-    let dfg = polars::io::csv::CsvReader::from_path(&path)
-        .unwrap()
-        .with_dtypes(Some(Arc::new(schema.clone())))
-        .with_delimiter(b';')
-        .with_n_rows(Some(1024))
-        .finish();
-    match dfg {
-        Ok(dfg) => break dfg,
-        Err(e) => {
-            dbg!(&e);
-            let str = e.to_string();
-            if let Some(capture) = rg.captures(&str) {
-                dbg!(&capture);
-                let name = capture.get(1).unwrap().as_str();
-                dbg!(name);
-                schema.with_column(name.into(), DataType::Utf8);
-            } else {
-                Err(e).unwrap()
-            }
-        }
-    }
-};*/
