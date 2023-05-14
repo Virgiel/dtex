@@ -97,7 +97,6 @@ impl App {
             // Draw headers
             let mut fmt_buf = String::new();
             let mut line = c.top();
-            line.bg(style::BG);
             for (off, name) in &cols {
                 let style = if *off == self.nav.c_col {
                     style::tab_selected()
