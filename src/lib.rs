@@ -4,7 +4,9 @@ use bstr::{BStr, BString};
 use event::event_listener;
 use fmt::rtrim;
 use nav::Nav;
+use notify::{RecommendedWatcher, Watcher};
 use polars::prelude::{AnyValue, DataFrame};
+use reedline::KeyModifiers;
 use source::Source;
 use tab::Tab;
 use tui::{
@@ -30,13 +32,10 @@ pub enum Open {
 }
 
 pub fn run(source: Vec<Open>) {
-    let (receiver, orchestrator) = event_listener();
-    let mut app = App::new();
+    let (receiver, watcher, orchestrator) = event_listener();
+    let mut app = App::new(watcher);
     for source in source {
-        app.add_tab(Tab::open(
-            orchestrator.clone(),
-            Source::new(source).unwrap(),
-        ));
+        app.add_tab(Tab::open(orchestrator.clone(), Source::new(source)));
     }
     let mut terminal = Terminal::new(io::stdout()).unwrap();
     loop {
@@ -47,13 +46,8 @@ pub fn run(source: Vec<Open>) {
             receiver.recv().unwrap()
         };
         loop {
-            match event {
-                event::Event::Term(ref e) => {
-                    if app.on_event(e) {
-                        return;
-                    }
-                }
-                event::Event::Task => {}
+            if app.on_event(event) {
+                return;
             }
             // Ingest more event before drawing if we can
             if let Ok(more) = receiver.try_recv() {
@@ -68,16 +62,23 @@ pub fn run(source: Vec<Open>) {
 struct App {
     tabs: Vec<Tab>,
     nav: Nav,
+    watcher: RecommendedWatcher,
 }
 impl App {
-    pub fn new() -> Self {
+    pub fn new(watcher: RecommendedWatcher) -> Self {
         Self {
             tabs: vec![],
             nav: Nav::new(),
+            watcher,
         }
     }
 
     pub fn add_tab(&mut self, tab: Tab) {
+        if let Some(path) = tab.loader.source.path() {
+            self.watcher
+                .watch(path, notify::RecursiveMode::NonRecursive)
+                .unwrap();
+        }
         self.tabs.push(tab);
     }
 
@@ -125,28 +126,57 @@ impl App {
         }
     }
 
-    pub fn on_event(&mut self, event: &Event) -> bool {
-        let mut pass = true;
-        if let Event::Key(event) = event {
-            if KeyCode::Tab == event.code {
-                self.nav.right_roll();
-                pass = false;
-            } else if KeyCode::BackTab == event.code {
-                self.nav.left_roll();
-                pass = false;
-            }
-        }
-        if pass {
-            if self.tabs.len() == 1 {
-                if self.tabs[0].on_event(event) {
-                    self.tabs.clear();
+    pub fn on_event(&mut self, event: event::Event) -> bool {
+        match event {
+            event::Event::Term(event) => {
+                let mut pass = true;
+                if let Event::Key(event) = event {
+                    match event.code {
+                        KeyCode::Tab => {
+                            self.nav.right_roll();
+                            pass = false;
+                        }
+                        KeyCode::BackTab => {
+                            self.nav.left_roll();
+                            pass = false;
+                        }
+                        KeyCode::Char('c' | 'd')
+                            if event.modifiers.contains(KeyModifiers::CONTROL) =>
+                        {
+                            return true;
+                        }
+                        _ => {}
+                    }
                 }
-            } else if let Some(tab) = self.tabs.get_mut(self.nav.c_col) {
-                if tab.on_event(event) {
-                    self.tabs.remove(self.nav.c_col);
+                if pass {
+                    if let Some(tab) = self.tabs.get_mut(self.nav.c_col) {
+                        if tab.on_event(&event) {
+                            if let Some(path) = tab.loader.source.path() {
+                                self.watcher.unwatch(path).unwrap();
+                            }
+                            self.tabs.remove(self.nav.c_col);
+                        }
+                    }
                 }
             }
+            event::Event::File(e) => {
+                // TODO handle more event
+                // TODO perf with many tabs
+                if e.kind.is_modify() {
+                    for path in e.paths {
+                        if let Some(tab) = self
+                            .tabs
+                            .iter_mut()
+                            .find(|t| t.loader.source.path() == Some(path.as_path()))
+                        {
+                            tab.set_source(Source::new(Open::File(path)))
+                        }
+                    }
+                }
+            }
+            event::Event::Task => {}
         }
+
         self.tabs.is_empty()
     }
 

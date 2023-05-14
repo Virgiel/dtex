@@ -70,7 +70,7 @@ pub fn fmt_field<'a>(buf: &'a mut String, ty: &Ty, stat: &ColStat, budget: usize
         let lhs = slc.find_byte(b'.').unwrap_or(slc.len()); // Everything before .
         let rhs = slc.len() - lhs; // Remaining
         pad(buf, stat.max_lhs + rhs - slc.len());
-        buf.push_str(std::str::from_utf8(slc).unwrap());
+        buf.push_str(std::str::from_utf8(slc).expect("lexical_core always generate ascii"));
     }
     match ty {
         Ty::Bool(bool) => {

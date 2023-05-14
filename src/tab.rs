@@ -20,7 +20,7 @@ enum State {
 pub struct Tab {
     pub name: String,
     orchestrator: Orchestrator,
-    loader: Loader,
+    pub loader: Loader,
     display_path: Option<String>,
     nav: Nav,
     sizer: Sizer,
@@ -40,6 +40,10 @@ impl Tab {
             state: State::Explore,
             orchestrator,
         }
+    }
+
+    pub fn set_source(&mut self, source: Source) {
+        self.loader.set_source(source, &self.orchestrator);
     }
 
     pub fn draw(&mut self, c: &mut Canvas) {
