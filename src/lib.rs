@@ -1,25 +1,28 @@
 use std::{borrow::Cow, io, path::PathBuf, time::Duration};
 
 use bstr::{BStr, BString};
-use event::event_listener;
+use event::{event_listener, Orchestrator};
 use fmt::rtrim;
 use nav::Nav;
 use notify::{RecommendedWatcher, Watcher};
 use polars::prelude::{AnyValue, DataFrame};
 use reedline::KeyModifiers;
+use shell::Shell;
 use source::Source;
 use tab::Tab;
 use tui::{
-    crossterm::event::{Event, KeyCode},
-    unicode_width::UnicodeWidthStr,
-    Canvas, Terminal,
+    crossterm::event::{Event, KeyCode, KeyEventKind},
+    Canvas, Terminal, unicode_width::UnicodeWidthStr,
 };
 
+mod describe;
 mod error;
 mod event;
 mod fmt;
+mod grid;
 mod nav;
 mod projection;
+mod shell;
 mod sizer;
 mod source;
 mod style;
@@ -31,9 +34,9 @@ pub enum Open {
     File(PathBuf),
 }
 
-pub fn run(source: Vec<Open>) {
+pub fn run(source: Vec<Open>, sql: String) {
     let (receiver, watcher, orchestrator) = event_listener();
-    let mut app = App::new(watcher);
+    let mut app = App::new(watcher, orchestrator.clone(), sql);
     for source in source {
         app.add_tab(Tab::open(orchestrator.clone(), Source::new(source)));
     }
@@ -63,18 +66,22 @@ struct App {
     tabs: Vec<Tab>,
     nav: Nav,
     watcher: RecommendedWatcher,
+    shell: Shell,
+    focus_shell: bool,
 }
 impl App {
-    pub fn new(watcher: RecommendedWatcher) -> Self {
+    pub fn new(watcher: RecommendedWatcher, orchestrator: Orchestrator, sql: String) -> Self {
         Self {
             tabs: vec![],
             nav: Nav::new(),
+            focus_shell: !sql.is_empty(),
+            shell: Shell::open(orchestrator, sql),
             watcher,
         }
     }
 
     pub fn add_tab(&mut self, tab: Tab) {
-        if let Some(path) = tab.loader.source.path() {
+        if let Some(path) = tab.grid.source.path() {
             self.watcher
                 .watch(path, notify::RecursiveMode::NonRecursive)
                 .unwrap();
@@ -84,7 +91,9 @@ impl App {
 
     pub fn draw(&mut self, c: &mut Canvas) {
         let mut coll_off_iter = self.nav.col_iter(self.tabs.len());
-        if self.tabs.len() == 1 {
+        if self.focus_shell {
+            self.shell.draw(c);
+        } else if self.tabs.len() == 1 {
             self.tabs[0].draw(c)
         } else if !self.tabs.is_empty() {
             let mut cols = Vec::new();
@@ -122,15 +131,19 @@ impl App {
             }
             self.tabs[self.nav.c_col].draw(c)
         } else {
-            c.top().draw("Empty", style::primary());
+            self.focus_shell = true;
+            self.shell.draw(c);
         }
     }
 
     pub fn on_event(&mut self, event: event::Event) -> bool {
         match event {
             event::Event::Term(event) => {
-                let mut pass = true;
                 if let Event::Key(event) = event {
+                    if event.kind != KeyEventKind::Press {
+                        return false;
+                    }
+                    let mut pass = true;
                     match event.code {
                         KeyCode::Tab => {
                             self.nav.right_roll();
@@ -147,14 +160,31 @@ impl App {
                         }
                         _ => {}
                     }
-                }
-                if pass {
-                    if let Some(tab) = self.tabs.get_mut(self.nav.c_col) {
-                        if tab.on_event(&event) {
-                            if let Some(path) = tab.loader.source.path() {
-                                self.watcher.unwatch(path).unwrap();
+
+                    if pass {
+                        if self.focus_shell {
+                            match self.shell.on_key(&event) {
+                                tab::Status::Continue => {}
+                                tab::Status::Exit => {
+                                    if self.tabs.is_empty() {
+                                        return true;
+                                    } else {
+                                        self.focus_shell = false;
+                                    }
+                                }
+                                tab::Status::OpenShell => unreachable!(),
                             }
-                            self.tabs.remove(self.nav.c_col);
+                        } else if let Some(tab) = self.tabs.get_mut(self.nav.c_col) {
+                            match tab.on_key(&event) {
+                                tab::Status::Continue => {}
+                                tab::Status::Exit => {
+                                    if let Some(path) = tab.grid.source.path() {
+                                        self.watcher.unwatch(path).unwrap();
+                                    }
+                                    self.tabs.remove(self.nav.c_col);
+                                }
+                                tab::Status::OpenShell => self.focus_shell = true,
+                            }
                         }
                     }
                 }
@@ -167,7 +197,7 @@ impl App {
                         if let Some(tab) = self
                             .tabs
                             .iter_mut()
-                            .find(|t| t.loader.source.path() == Some(path.as_path()))
+                            .find(|t| t.grid.source.path() == Some(path.as_path()))
                         {
                             tab.set_source(Source::new(Open::File(path)))
                         }
@@ -176,12 +206,13 @@ impl App {
             }
             event::Event::Task => {}
         }
-
-        self.tabs.is_empty()
+        self.tabs.is_empty() && !self.focus_shell
     }
 
     fn is_loading(&self) -> bool {
-        self.tabs[self.nav.c_col].is_loading()
+        false
+        //self.shell.is_loading()
+        //self.tabs[self.nav.c_col].is_loading()
     }
 }
 pub enum Ty<'a> {
@@ -199,30 +230,38 @@ impl Ty<'_> {
     }
 }
 
-pub fn to_ty(data: AnyValue) -> Ty {
-    match data {
-        AnyValue::Null => Ty::Null,
-        AnyValue::Boolean(bool) => Ty::Bool(bool),
-        AnyValue::UInt8(nb) => Ty::U64(nb as u64),
-        AnyValue::UInt16(nb) => Ty::U64(nb as u64),
-        AnyValue::UInt32(nb) => Ty::U64(nb as u64),
-        AnyValue::UInt64(nb) => Ty::U64(nb),
-        AnyValue::Int8(nb) => Ty::I64(nb as i64),
-        AnyValue::Int16(nb) => Ty::I64(nb as i64),
-        AnyValue::Int32(nb) => Ty::I64(nb as i64),
-        AnyValue::Int64(nb) => Ty::I64(nb),
-        AnyValue::Float32(nb) => Ty::F64(nb as f64),
-        AnyValue::Float64(nb) => Ty::F64(nb),
-        AnyValue::Utf8(str) => Ty::Str(Cow::Borrowed(BStr::new(str))),
-        AnyValue::Utf8Owned(str) => Ty::Str(Cow::Owned(BString::new(str.as_bytes().to_vec()))),
-        AnyValue::Binary(bs) => Ty::Str(Cow::Borrowed(BStr::new(bs))),
-        AnyValue::BinaryOwned(bs) => Ty::Str(Cow::Owned(BString::new(bs))),
-        AnyValue::Date(_) => todo!(),
-        AnyValue::Datetime(_, _, _) => todo!(),
-        AnyValue::Duration(_, _) => todo!(),
-        AnyValue::Time(_) => todo!(),
-        AnyValue::List(_) => todo!(),
-        AnyValue::Struct(_, _, _) => todo!(),
-        AnyValue::StructOwned(_) => todo!(),
+impl<'a> From<&'a str> for Ty<'a> {
+    fn from(value: &'a str) -> Self {
+        Self::Str(Cow::Borrowed(value.into()))
+    }
+}
+
+impl<'a> From<AnyValue<'a>> for Ty<'a> {
+    fn from(value: AnyValue<'a>) -> Self {
+        match value {
+            AnyValue::Null => Ty::Null,
+            AnyValue::Boolean(bool) => Ty::Bool(bool),
+            AnyValue::UInt8(nb) => Ty::U64(nb as u64),
+            AnyValue::UInt16(nb) => Ty::U64(nb as u64),
+            AnyValue::UInt32(nb) => Ty::U64(nb as u64),
+            AnyValue::UInt64(nb) => Ty::U64(nb),
+            AnyValue::Int8(nb) => Ty::I64(nb as i64),
+            AnyValue::Int16(nb) => Ty::I64(nb as i64),
+            AnyValue::Int32(nb) => Ty::I64(nb as i64),
+            AnyValue::Int64(nb) => Ty::I64(nb),
+            AnyValue::Float32(nb) => Ty::F64(nb as f64),
+            AnyValue::Float64(nb) => Ty::F64(nb),
+            AnyValue::Utf8(str) => Ty::Str(Cow::Borrowed(str.into())),
+            AnyValue::Utf8Owned(str) => Ty::Str(Cow::Owned(BString::new(str.as_bytes().to_vec()))),
+            AnyValue::Binary(bs) => Ty::Str(Cow::Borrowed(BStr::new(bs))),
+            AnyValue::BinaryOwned(bs) => Ty::Str(Cow::Owned(BString::new(bs))),
+            AnyValue::Date(_) => todo!(),
+            AnyValue::Datetime(_, _, _) => todo!(),
+            AnyValue::Duration(_, _) => todo!(),
+            AnyValue::Time(_) => todo!(),
+            AnyValue::List(_) => todo!(),
+            AnyValue::Struct(_, _, _) => todo!(),
+            AnyValue::StructOwned(_) => todo!(),
+        }
     }
 }

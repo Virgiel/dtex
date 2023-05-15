@@ -1,31 +1,30 @@
-use reedline::{KeyCode, KeyModifiers};
-use tui::{crossterm::event::Event, unicode_width::UnicodeWidthStr, Canvas};
+use tui::{crossterm::event::KeyEvent, Canvas};
 
 use crate::{
     event::Orchestrator,
-    fmt::{self, rtrim, ColStat},
-    nav::Nav,
-    projection::{self, Projection},
-    sizer::{self, Sizer},
-    source::{Loader, Source},
-    style, to_ty,
+    grid::{Grid, GridUI},
+    source::Source,
+    style,
 };
 
-enum State {
+pub enum Status {
+    Continue,
+    Exit,
+    OpenShell,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub enum State {
     Explore,
     Size,
     Projection,
+    Shell,
 }
 
 pub struct Tab {
     pub name: String,
-    orchestrator: Orchestrator,
-    pub loader: Loader,
+    pub grid: Grid,
     display_path: Option<String>,
-    nav: Nav,
-    sizer: Sizer,
-    projection: Projection,
-    state: State,
 }
 
 impl Tab {
@@ -33,208 +32,178 @@ impl Tab {
         Self {
             display_path: source.display_path(),
             name: source.name(),
-            loader: Loader::new(source, &orchestrator),
-            sizer: Sizer::new(),
-            projection: Projection::new(),
-            nav: Nav::new(),
-            state: State::Explore,
-            orchestrator,
+            grid: Grid::new(State::Explore, source, orchestrator),
         }
     }
 
     pub fn set_source(&mut self, source: Source) {
-        self.loader.set_source(source, &self.orchestrator);
+        self.grid.set_source(source);
     }
 
     pub fn draw(&mut self, c: &mut Canvas) {
-        self.loader.tick();
-        let nb_col = self.loader.df.get_columns().len();
-        let nb_row = self.loader.df.height();
-        self.projection.set_nb_cols(nb_col);
-        let visible_cols = self.projection.nb_cols();
+        let status = c.reserve_btm(1);
 
-        let v_row = c.height() - 2; // header bar + status bar
-        let row_off = self.nav.row_offset(nb_row, v_row);
-        let mut coll_off_iter = self.nav.col_iter(visible_cols);
-        // Nb call necessary to print the biggest index
-        let id_len = ((row_off + v_row) as f32).log10() as usize + 1;
-        // Whole canvas minus index col
-        let mut remaining_width = c.width() - id_len + 1;
-        let mut cols = Vec::new();
-        // Fill canvas with columns
-        while remaining_width > cols.len() {
-            if let Some(off) = coll_off_iter.next() {
-                let idx = self.projection.project(off);
-                let col = &self.loader.df.get_columns()[idx];
-                let (fields, stat) = col.phys_iter().skip(row_off).take(v_row).fold(
-                    (Vec::new(), ColStat::new()),
-                    |(mut vec, mut stat), value| {
-                        let ty = to_ty(value);
-                        stat.add(&ty);
-                        vec.push(ty);
-                        (vec, stat)
-                    },
-                );
-                let size = self.sizer.size(idx, stat.budget(), col.name().width());
-                let allowed = size.min(remaining_width - cols.len());
-                remaining_width = remaining_width.saturating_sub(allowed);
-                cols.push((off, col.name(), fields, stat, allowed));
-            } else {
-                break;
-            }
-        }
-        cols.sort_unstable_by_key(|(i, _, _, _, _)| *i);
-        drop(coll_off_iter);
+        // Draw grid
+        let GridUI {
+            col_name,
+            progress,
+            state,
+            describe,
+        } = self.grid.draw(c);
 
-        // Draw status bar
-        let mut l = c.btm();
-        let (status, style) = match self.state {
+        let mut l = c.consume(status).btm();
+        let (status, style) = match state {
+            State::Explore if describe => (" DESC ", style::state_other()),
             State::Explore => ("  EX  ", style::state_default()),
             State::Size => (" SIZE ", style::state_action()),
             State::Projection => (" MOVE ", style::state_alternate()),
+            State::Shell => (" SQL  ", style::state_action()),
         };
         l.draw(status, style);
         l.draw(" ", style::primary());
-        if self.is_loading() {
-            l.rdraw("loading...", style::progress());
+        if let Some(task) = self.grid.is_loading() {
+            l.rdraw(format_args!("{task}..."), style::progress());
         }
-        let progress = ((self.nav.c_row + 1) * 100) / nb_row.max(1);
         l.rdraw(format_args!(" {progress:>3}%"), style::primary());
-
-        if visible_cols > 0 {
-            let name = self.loader.df.get_columns()[self.nav.c_col].name();
+        if let Some(name) = col_name {
             l.rdraw(name, style::primary());
             l.rdraw(" ", style::primary());
         }
         if let Some(path) = &self.display_path {
             l.draw(path, style::progress());
         }
-
-        // Draw error bar
-        if !self.loader.error.is_empty() {
-            let mut l = c.btm();
-            l.draw(&self.loader.error, style::error());
-        }
-
-        let fmt_buf = &mut String::with_capacity(256);
-        // Draw headers
-        {
-            let line = &mut c.top();
-            line.draw(format_args!("{:>1$} ", '#', id_len), style::index().bold());
-
-            for (off, name, _, _, budget) in &cols {
-                let style = if *off == self.nav.c_col {
-                    style::selected().bold()
-                } else {
-                    style::primary().bold()
-                };
-                line.draw(
-                    format_args!("{:<1$}", rtrim(name, fmt_buf, *budget), budget),
-                    style,
-                );
-                line.draw("│", style::separator());
-            }
-        }
-
-        // Draw rows
-        for r in 0..v_row.min(nb_row - row_off) {
-            let style = if r == self.nav.c_row - self.nav.o_row {
-                style::selected()
-            } else {
-                style::primary()
-            };
-            let line = &mut c.top();
-            line.draw(
-                format_args!("{:>1$} ", r + self.nav.o_row + 1, id_len),
-                style::index(),
-            );
-            for (_, _, fields, stat, budget) in &cols {
-                let ty = &fields[r];
-                line.draw(
-                    format_args!("{}", fmt::fmt_field(fmt_buf, ty, stat, *budget)),
-                    style,
-                );
-                line.draw("│", style::separator());
-            }
-        }
     }
 
-    pub fn on_event(&mut self, event: &Event) -> bool {
-        if let Event::Key(event) = event {
-            let shift = event.modifiers.contains(KeyModifiers::SHIFT);
-            let off = self.nav.c_col;
-            match self.state {
-                State::Explore => match event.code {
-                    KeyCode::Char('q') => return true,
-                    KeyCode::Char('s') => self.state = State::Size,
-                    KeyCode::Char('m') => self.state = State::Projection,
-                    KeyCode::Char('g') => self.nav.top(),
-                    KeyCode::Char('G') => self.nav.btm(),
-                    KeyCode::Char('a') => self.loader.load(None, &self.orchestrator),
-                    KeyCode::Left | KeyCode::Char('H') if shift => self.nav.win_left(),
-                    KeyCode::Down | KeyCode::Char('J') if shift => self.nav.win_down(),
-                    KeyCode::Up | KeyCode::Char('K') if shift => self.nav.win_up(),
-                    KeyCode::Right | KeyCode::Char('L') if shift => self.nav.win_right(),
-                    KeyCode::Left | KeyCode::Char('h') => self.nav.left(),
-                    KeyCode::Down | KeyCode::Char('j') => self.nav.down(),
-                    KeyCode::Up | KeyCode::Char('k') => self.nav.up(),
-                    KeyCode::Right | KeyCode::Char('l') => self.nav.right(),
-                    _ => {}
-                },
-                State::Projection => match event.code {
-                    KeyCode::Char('q') | KeyCode::Esc => self.state = State::Explore,
-                    KeyCode::Left | KeyCode::Char('H') if shift => {
-                        self.projection.cmd(off, projection::Cmd::Left);
-                        self.nav.left()
-                    }
-                    KeyCode::Down | KeyCode::Char('J') if shift => {
-                        self.projection.cmd(off, projection::Cmd::Hide);
-                    }
-                    KeyCode::Up | KeyCode::Char('K') if shift => self.projection.reset(), // TODO stay on focus column
-                    KeyCode::Right | KeyCode::Char('L') if shift => {
-                        self.projection.cmd(off, projection::Cmd::Right);
-                        self.nav.right();
-                    }
-                    KeyCode::Left | KeyCode::Char('h') => self.nav.left(),
-                    KeyCode::Down | KeyCode::Char('j') => self.nav.down(),
-                    KeyCode::Up | KeyCode::Char('k') => self.nav.up(),
-                    KeyCode::Right | KeyCode::Char('l') => self.nav.right(),
-                    _ => {}
-                },
-                State::Size => {
-                    let col_idx = self.nav.c_col;
-                    let mut exit_size = true;
-                    match event.code {
-                        KeyCode::Esc => {}
-                        KeyCode::Char('r') => self.sizer.reset(),
-                        KeyCode::Char('f') => self.sizer.fit(),
-                        KeyCode::Char(' ') => self.sizer.toggle(),
-                        KeyCode::Left | KeyCode::Char('h') => {
-                            self.sizer.cmd(col_idx, sizer::Cmd::Less);
-                            exit_size = false
-                        }
-                        KeyCode::Down | KeyCode::Char('j') => {
-                            self.sizer.cmd(col_idx, sizer::Cmd::Constrain)
-                        }
-                        KeyCode::Up | KeyCode::Char('k') => {
-                            self.sizer.cmd(col_idx, sizer::Cmd::Free)
-                        }
-                        KeyCode::Right | KeyCode::Char('l') => {
-                            self.sizer.cmd(col_idx, sizer::Cmd::More);
-                            exit_size = false;
-                        }
-                        _ => exit_size = false,
-                    };
-                    if exit_size {
-                        self.state = State::Explore
-                    }
-                }
-            }
-        }
-        false
+    pub fn on_key(&mut self, event: &KeyEvent) -> Status {
+        self.grid.on_key(event)
     }
 
     pub fn is_loading(&self) -> bool {
-        self.loader.is_loading()
+        self.grid.is_loading().is_some()
+    }
+}
+
+pub mod prompt {
+    use reedline::LineBuffer;
+
+    struct HistoryBuffer<T, const N: usize> {
+        ring: [T; N],
+        head: usize,
+        filled: bool,
+    }
+
+    impl<T: Default, const N: usize> HistoryBuffer<T, N> {
+        pub fn new() -> Self {
+            Self {
+                ring: std::array::from_fn(|_| T::default()),
+                head: 0,
+                filled: false,
+            }
+        }
+
+        pub fn push(&mut self, item: T) {
+            self.ring[self.head] = item;
+            if self.head + 1 == self.ring.len() {
+                self.filled = true;
+            }
+            self.head = (self.head + 1) % self.ring.len();
+        }
+
+        pub fn get(&self, idx: usize) -> &T {
+            assert!(idx <= self.ring.len() && self.len() > 0);
+            let pos = (self.ring.len() + self.head - idx - 1) % self.ring.len();
+            &self.ring[pos]
+        }
+
+        pub fn len(&self) -> usize {
+            if self.filled {
+                self.ring.len()
+            } else {
+                self.head
+            }
+        }
+    }
+
+    pub struct Prompt {
+        history: HistoryBuffer<String, 5>,
+        pos: Option<usize>,
+        buffer: LineBuffer,
+    }
+
+    impl Prompt {
+        pub fn new(init: &str) -> Self {
+            Self {
+                history: HistoryBuffer::new(),
+                pos: None,
+                buffer: LineBuffer::from(init),
+            }
+        }
+
+        /// Ensure buffer contains the right data
+        fn solidify(&mut self) {
+            if let Some(pos) = self.pos.take() {
+                self.buffer.clear();
+                self.buffer.insert_str(self.history.get(pos));
+            }
+        }
+
+        pub fn exec(&mut self, cmd: PromptCmd) {
+            match cmd {
+                PromptCmd::Write(c) => {
+                    self.solidify();
+                    self.buffer.insert_char(c);
+                }
+                PromptCmd::Left => {
+                    self.solidify();
+                    self.buffer.move_left();
+                }
+                PromptCmd::Right => {
+                    self.solidify();
+                    self.buffer.move_right()
+                }
+                PromptCmd::Delete => {
+                    self.solidify();
+                    self.buffer.delete_left_grapheme();
+                }
+                PromptCmd::Prev => match &mut self.pos {
+                    Some(pos) if *pos + 1 < self.history.len() => *pos += 1,
+                    None if self.history.len() > 0 => self.pos = Some(0),
+                    _ => {}
+                },
+                PromptCmd::Next => match &mut self.pos {
+                    Some(0) => self.pos = None,
+                    Some(pos) => *pos = pos.saturating_sub(1),
+                    None => {}
+                },
+                PromptCmd::New(keep) => {
+                    let (str, _) = self.state();
+                    self.history.push(str.into());
+                    self.pos = keep.then_some(0);
+                    self.buffer.clear();
+                }
+                PromptCmd::Jump(pos) => self.buffer.set_insertion_point(pos),
+            }
+        }
+
+        pub fn state(&self) -> (&str, usize) {
+            match self.pos {
+                Some(pos) => {
+                    let str = self.history.get(pos);
+                    (str, str.len())
+                }
+                None => (self.buffer.get_buffer(), self.buffer.insertion_point()),
+            }
+        }
+    }
+
+    pub enum PromptCmd {
+        Write(char),
+        Left,
+        Right,
+        Prev,
+        Next,
+        New(bool),
+        Delete,
+        Jump(usize),
     }
 }

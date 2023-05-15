@@ -32,6 +32,10 @@ pub fn state_alternate() -> Style {
     none().bg(Color::Magenta).bold()
 }
 
+pub fn state_other() -> Style {
+    none().bg(Color::Cyan).bold()
+}
+
 pub fn tab() -> Style {
     none().fg(Color::DarkGrey).bold()
 }
