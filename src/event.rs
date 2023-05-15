@@ -13,8 +13,8 @@ impl Orchestrator {
     /// Start a new background task
     pub fn task<T: Send + 'static>(
         &self,
-        spawn: impl Fn() -> T + Send + 'static,
-    ) -> oneshot::Receiver<T> {
+        spawn: impl Fn() -> crate::error::Result<T> + Send + 'static,
+    ) -> Task<T> {
         let (sender, receiver) = oneshot::channel();
         let wake = self.0.clone();
         std::thread::spawn(move || {
@@ -24,7 +24,23 @@ impl Orchestrator {
                 wake.unpark();
             }
         });
-        receiver
+        Task(receiver)
+    }
+}
+
+pub struct Task<T>(oneshot::Receiver<crate::error::Result<T>>);
+
+impl<T> Task<T> {
+    pub fn tick(&mut self) -> crate::error::Result<Option<T>> {
+        match self.0.try_recv() {
+            Ok(result) => Some(result).transpose(),
+            Err(it) => match it {
+                oneshot::TryRecvError::Empty => Ok(None),
+                oneshot::TryRecvError::Disconnected => {
+                    Err(format!("Task failed without error").into())
+                }
+            },
+        }
     }
 }
 
@@ -56,7 +72,9 @@ pub fn event_listener() -> (Receiver<Event>, RecommendedWatcher, Orchestrator) {
         let sender = sender.clone();
         notify::recommended_watcher(move |res: notify::Result<notify::Event>| {
             let event = res.expect("Failed to receive file system event");
-            sender.send(Event::File(event)).expect("Failed to send file system event")
+            sender
+                .send(Event::File(event))
+                .expect("Failed to send file system event")
         })
         .expect("Failed to start file system watcher")
     };
@@ -66,7 +84,9 @@ pub fn event_listener() -> (Receiver<Event>, RecommendedWatcher, Orchestrator) {
         .spawn(move || loop {
             match tui::crossterm::event::read() {
                 Ok(event) => {
-                    sender.send(Event::Term(event)).expect("Failed to send terminal event");
+                    sender
+                        .send(Event::Term(event))
+                        .expect("Failed to send terminal event");
                 }
                 Err(err) => panic!("{err}"),
             }

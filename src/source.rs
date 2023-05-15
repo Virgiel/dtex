@@ -12,8 +12,8 @@ use polars::prelude::{
 };
 
 use crate::{
-    error::{Result, StrError},
-    event::Orchestrator,
+    error::Result,
+    event::{Orchestrator, Task},
     utils::cache_regex,
     Open,
 };
@@ -21,33 +21,28 @@ use crate::{
 const PRELOAD_LEN: usize = 1024;
 
 pub struct LoadingTask {
-    receiver: oneshot::Receiver<Result<DataFrame>>, // Receiver for the backend task
+    receiver: Task<DataFrame>, // Receiver for the backend task
     goal: Option<usize>,
 }
 
 pub struct Loader {
-    pub source: Arc<Source>,
     task: Option<LoadingTask>,
     pub df: DataFrame,
     full: bool,
-    pub error: String,
 }
 
 impl Loader {
-    pub fn new(source: Source, orchestrator: &Orchestrator) -> Self {
+    pub fn new(source: Arc<Source>, orchestrator: &Orchestrator) -> Self {
         let mut tmp = Self {
             task: None,
             df: DataFrame::default(),
             full: false,
-            source: Arc::new(source),
-            error: String::new(),
         };
-        tmp.bg_load(Some(PRELOAD_LEN), orchestrator);
+        tmp.bg_load(source, Some(PRELOAD_LEN), orchestrator);
         tmp
     }
 
-    pub fn set_source(&mut self, source: Source, orchestrator: &Orchestrator) {
-        self.source = Arc::new(source);
+    pub fn reload(&mut self, source: Arc<Source>, orchestrator: &Orchestrator) {
         // Current task goal or current data frame length + 1 if full to handle size change
         let goal = self
             .task
@@ -55,10 +50,15 @@ impl Loader {
             .map(|t| t.goal.unwrap_or(usize::MAX))
             .unwrap_or(self.df.height() + self.full as usize)
             .max(PRELOAD_LEN);
-        self.bg_load(Some(goal), orchestrator);
+        self.bg_load(source, Some(goal), orchestrator);
     }
 
-    pub fn load(&mut self, goal: Option<usize>, orchestrator: &Orchestrator) {
+    pub fn load_more(
+        &mut self,
+        source: Arc<Source>,
+        goal: Option<usize>,
+        orchestrator: &Orchestrator,
+    ) {
         // Skip loading if we already loaded, or are loading, a bigger data frame
         if self.df.height().max(
             self.task
@@ -69,44 +69,37 @@ impl Loader {
         {
             return;
         }
-        self.bg_load(goal, orchestrator);
+        self.bg_load(source, goal, orchestrator);
     }
 
     // Start background loading task
-    fn bg_load(&mut self, goal: Option<usize>, orchestrator: &Orchestrator) {
-        if let Some(df) = self.source.sync_full() {
+    fn bg_load(&mut self, source: Arc<Source>, goal: Option<usize>, orchestrator: &Orchestrator) {
+        if let Some(df) = source.sync_full() {
             self.df = df;
             self.full = true;
             self.task = None;
         } else {
             self.task = {
-                let source = self.source.clone();
                 let receiver = orchestrator.task(move || source.load(goal));
                 Some(LoadingTask { receiver, goal })
             };
         };
     }
 
-    pub fn tick(&mut self) {
-        if let Some(task) = &self.task {
-            match task.receiver.try_recv() {
-                Ok(result) => {
-                    match result {
-                        Ok(df) => {
-                            self.full = df.height() < task.goal.unwrap_or(usize::MAX);
-                            self.df = df;
-                        }
-                        Err(err) => self.error = err.0,
-                    }
+    pub fn tick(&mut self) -> Result<bool> {
+        if let Some(task) = &mut self.task {
+            match task.receiver.tick() {
+                Ok(Some(df)) => {
+                    self.df = df;
+                    self.full = self.df.height() < task.goal.unwrap_or(usize::MAX);
                     self.task = None;
+                    Ok(true)
                 }
-                Err(it) => match it {
-                    oneshot::TryRecvError::Empty => {}
-                    oneshot::TryRecvError::Disconnected => {
-                        self.error = format!("Loader failed without error")
-                    }
-                },
+                Ok(None) => Ok(false),
+                Err(it) => Err(it),
             }
+        } else {
+            Ok(false)
         }
     }
 
@@ -122,6 +115,7 @@ pub enum Source {
         path: PathBuf,
         kind: FileKind,
     },
+    Sql(String),
 }
 
 pub enum FileKind {
@@ -164,6 +158,7 @@ impl Source {
     pub fn name(&self) -> String {
         match self {
             Self::Memory(_) => "polars".to_string(),
+            Self::Sql(_) => "shell".to_string(),
             Self::File { input, .. } => input
                 .file_stem()
                 .unwrap_or_default()
@@ -174,14 +169,14 @@ impl Source {
 
     pub fn path(&self) -> Option<&Path> {
         match self {
-            Self::Memory(_) => None,
+            Self::Memory(_) | Self::Sql(_) => None,
             Self::File { path, .. } => Some(path),
         }
     }
 
     pub fn display_path(&self) -> Option<String> {
         match self {
-            Self::Memory(_) => None,
+            Self::Memory(_) | Self::Sql(_) => None,
             Self::File { input, .. } => Some(input.to_string_lossy().to_string()),
         }
     }
@@ -189,21 +184,19 @@ impl Source {
     /// Fast load of a in memory data frame
     fn sync_full(&self) -> Option<DataFrame> {
         match self {
-            Source::Memory(p) => Some(p.clone()),
-            Source::File { .. } => None,
+            Self::Memory(p) => Some(p.clone()),
+            Self::File { .. } | Self::Sql(_) => None,
         }
     }
 
-    /// Load up to `limit` rows handling schema errors
-    fn load(&self, limit: Option<usize>) -> Result<DataFrame> {
+    /// Automatic schema inference
+    pub fn apply<T>(&self, lambda: impl Fn(LazyFrame) -> Result<T>) -> Result<T> {
         let mut schema = Schema::new();
         loop {
             // polars can panic
-            let result: Result<DataFrame> = std::panic::catch_unwind(AssertUnwindSafe(|| {
+            let result: Result<T> = std::panic::catch_unwind(AssertUnwindSafe(|| {
                 let lazy = self.lazy_frame(&schema)?;
-                Ok(lazy
-                    .limit(limit.map(|n| n as u32).unwrap_or(u32::MAX))
-                    .collect()?)
+                lambda(lazy)
             }))
             .map_err(|_| "polars failure")?;
 
@@ -217,20 +210,30 @@ impl Source {
                             polars::prelude::DataType::Utf8,
                         );
                     } else {
-                        return Err(StrError::from(err));
+                        return Err(err);
                     }
                 }
             }
         }
     }
 
+    /// Load up to `limit` rows handling schema errors
+    fn load(&self, limit: Option<usize>) -> Result<DataFrame> {
+        self.apply(|lazy| {
+            Ok(lazy
+                .limit(limit.map(|n| n as u32).unwrap_or(u32::MAX))
+                .collect()?)
+        })
+    }
+
     /// Lazy frame from source
     fn lazy_frame(&self, schema: &Schema) -> Result<LazyFrame> {
         Ok(match self {
             Self::Memory(df) => df.clone().lazy(),
+            Self::Sql(sql) => polars::sql::SQLContext::new().execute(sql)?,
             Self::File { path, kind, .. } => match kind {
                 FileKind::Csv => {
-                    let mut file = std::fs::File::open(&path)?;
+                    let mut file = std::fs::File::open(path)?;
                     let delimiter = infer_cdv_delimiter(&mut file)?;
                     LazyCsvReader::new(path)
                         .with_dtype_overwrite(Some(schema))
