@@ -1,9 +1,11 @@
 use std::{
     sync::mpsc::{sync_channel, Receiver},
     thread::{Builder, Thread},
+    time::Duration,
 };
 
-use notify::RecommendedWatcher;
+use notify::{FsEventWatcher, RecommendedWatcher};
+use notify_debouncer_full::{new_debouncer, FileIdMap};
 
 /// Task orchestrator that generate event on task completion
 #[derive(Clone)]
@@ -46,12 +48,16 @@ impl<T> Task<T> {
 
 pub enum Event {
     Term(tui::crossterm::event::Event),
-    File(notify::Event),
+    FS(Result<Vec<notify::Event>, Vec<notify::Error>>),
     Task,
 }
 
 /// Create a channel to receive all the event and a task orchestrator
-pub fn event_listener() -> (Receiver<Event>, RecommendedWatcher, Orchestrator) {
+pub fn event_listener() -> (
+    Receiver<Event>,
+    notify_debouncer_full::Debouncer<RecommendedWatcher, FileIdMap>,
+    Orchestrator,
+) {
     let (sender, receiver) = sync_channel(100);
     // Task completion listener
     let waker = {
@@ -68,15 +74,26 @@ pub fn event_listener() -> (Receiver<Event>, RecommendedWatcher, Orchestrator) {
             .clone()
     };
     // File system event
-    let watcher = {
+    let debouncer = {
         let sender = sender.clone();
-        notify::recommended_watcher(move |res: notify::Result<notify::Event>| {
-            let event = res.expect("Failed to receive file system event");
-            sender
-                .send(Event::File(event))
-                .expect("Failed to send file system event")
-        })
-        .expect("Failed to start file system watcher")
+        let (tx, rx) = std::sync::mpsc::channel();
+        let debouncer = new_debouncer(Duration::from_secs(1), None, tx)
+            .expect("Failed to setup file system watcher");
+
+        Builder::new()
+            .name("fs_listener".into())
+            .spawn(move || loop {
+                match rx.recv() {
+                    Ok(event) => {
+                        sender
+                            .send(Event::FS(event))
+                            .expect("Failed to file terminal event");
+                    }
+                    Err(err) => panic!("{err}"),
+                }
+            })
+            .expect("Failed to start fs_listener thread");
+        debouncer
     };
     // Term event listener
     Builder::new()
@@ -93,5 +110,5 @@ pub fn event_listener() -> (Receiver<Event>, RecommendedWatcher, Orchestrator) {
         })
         .expect("Failed to start term_listener thread");
 
-    (receiver, watcher, Orchestrator(waker))
+    (receiver, debouncer, Orchestrator(waker))
 }
