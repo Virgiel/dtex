@@ -5,6 +5,7 @@ use event::{event_listener, Orchestrator};
 use fmt::rtrim;
 use nav::Nav;
 use notify::{RecommendedWatcher, Watcher};
+use notify_debouncer_full::FileIdMap;
 use polars::prelude::{AnyValue, DataFrame};
 use reedline::KeyModifiers;
 use shell::Shell;
@@ -12,7 +13,8 @@ use source::Source;
 use tab::Tab;
 use tui::{
     crossterm::event::{Event, KeyCode, KeyEventKind},
-    Canvas, Terminal, unicode_width::UnicodeWidthStr,
+    unicode_width::UnicodeWidthStr,
+    Canvas, Terminal,
 };
 
 mod describe;
@@ -65,24 +67,29 @@ pub fn run(source: Vec<Open>, sql: String) {
 struct App {
     tabs: Vec<Tab>,
     nav: Nav,
-    watcher: RecommendedWatcher,
+    debouncer: notify_debouncer_full::Debouncer<RecommendedWatcher, FileIdMap>,
     shell: Shell,
     focus_shell: bool,
 }
 impl App {
-    pub fn new(watcher: RecommendedWatcher, orchestrator: Orchestrator, sql: String) -> Self {
+    pub fn new(
+        debouncer: notify_debouncer_full::Debouncer<RecommendedWatcher, FileIdMap>,
+        orchestrator: Orchestrator,
+        sql: String,
+    ) -> Self {
         Self {
             tabs: vec![],
             nav: Nav::new(),
             focus_shell: !sql.is_empty(),
             shell: Shell::open(orchestrator, sql),
-            watcher,
+            debouncer,
         }
     }
 
     pub fn add_tab(&mut self, tab: Tab) {
         if let Some(path) = tab.grid.source.path() {
-            self.watcher
+            self.debouncer
+                .watcher()
                 .watch(path, notify::RecursiveMode::NonRecursive)
                 .unwrap();
         }
@@ -179,7 +186,7 @@ impl App {
                                 tab::Status::Continue => {}
                                 tab::Status::Exit => {
                                     if let Some(path) = tab.grid.source.path() {
-                                        self.watcher.unwatch(path).unwrap();
+                                        self.debouncer.watcher().unwatch(path).unwrap();
                                     }
                                     self.tabs.remove(self.nav.c_col);
                                 }
@@ -189,19 +196,26 @@ impl App {
                     }
                 }
             }
-            event::Event::File(e) => {
-                // TODO handle more event
-                // TODO perf with many tabs
-                if e.kind.is_modify() {
-                    for path in e.paths {
-                        if let Some(tab) = self
-                            .tabs
-                            .iter_mut()
-                            .find(|t| t.grid.source.path() == Some(path.as_path()))
-                        {
-                            tab.set_source(Source::new(Open::File(path)))
+            event::Event::FS(e) => {
+                match e {
+                    Ok(events) => {
+                        for e in events {
+                            // TODO handle more event
+                            // TODO perf with many tabs
+                            if e.kind.is_modify() {
+                                for path in e.paths {
+                                    if let Some(tab) = self
+                                        .tabs
+                                        .iter_mut()
+                                        .find(|t| t.grid.source.path() == Some(path.as_path()))
+                                    {
+                                        tab.set_source(Source::new(Open::File(path)))
+                                    }
+                                }
+                            }
                         }
                     }
+                    Err(_) => todo!(),
                 }
             }
             event::Event::Task => {}
