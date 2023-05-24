@@ -109,7 +109,10 @@ impl Loader {
 
 enum Kind {
     Eager(DataFrame),
-    Lazy(LazyFrame),
+    Sql {
+        lf: LazyFrame,
+        sql: String,
+    },
     File {
         path: PathBuf,
         display_path: String,
@@ -134,7 +137,7 @@ impl Source {
     pub fn empty() -> Self {
         Self {
             name: "#".into(),
-            kind: Kind::Eager(DataFrame::default())
+            kind: Kind::Eager(DataFrame::default()),
         }
     }
 
@@ -179,11 +182,21 @@ impl Source {
         if let Some(current) = current {
             ctx.register("current", current.lazy_frame(&Schema::new())?);
         }
-        let lazy = ctx.execute(sql)?;
+        let lf = ctx.execute(sql)?;
         Ok(Self {
             name: "shell".into(),
-            kind: Kind::Lazy(lazy),
+            kind: Kind::Sql {
+                lf,
+                sql: sql.into(),
+            },
         })
+    }
+
+    pub fn sql(&self) -> &str {
+        match &self.kind {
+            Kind::Sql { sql, .. } => sql,
+            Kind::Eager(_) | Kind::File { .. } => "SELECT * FROM current",
+        }
     }
 
     pub fn name(&self) -> &str {
@@ -192,14 +205,14 @@ impl Source {
 
     pub fn path(&self) -> Option<&Path> {
         match &self.kind {
-            Kind::Eager(_) | Kind::Lazy(_) => None,
+            Kind::Eager(_) | Kind::Sql { .. } => None,
             Kind::File { path, .. } => Some(path),
         }
     }
 
     pub fn display_path(&self) -> Option<&str> {
         match &self.kind {
-            Kind::Eager(_) | Kind::Lazy(_) => None,
+            Kind::Eager(_) | Kind::Sql { .. } => None,
             Kind::File { display_path, .. } => Some(display_path),
         }
     }
@@ -208,7 +221,7 @@ impl Source {
     fn sync_full(&self) -> Option<DataFrame> {
         match &self.kind {
             Kind::Eager(p) => Some(p.clone()),
-            Kind::File { .. } | Kind::Lazy(_) => None,
+            Kind::File { .. } | Kind::Sql { .. } => None,
         }
     }
 
@@ -253,7 +266,7 @@ impl Source {
     fn lazy_frame(&self, schema: &Schema) -> Result<LazyFrame> {
         Ok(match &self.kind {
             Kind::Eager(df) => df.clone().lazy(),
-            Kind::Lazy(sql) => sql.clone(),
+            Kind::Sql { lf, .. } => lf.clone(),
             Kind::File { path, kind, .. } => match kind {
                 FileKind::Csv => {
                     let mut file = std::fs::File::open(path)?;
