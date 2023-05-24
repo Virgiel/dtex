@@ -3,7 +3,7 @@ use std::{borrow::Cow, io, time::Duration};
 use bstr::{BStr, BString};
 use event::event_listener;
 use fmt::rtrim;
-use nav::Nav;
+use grid::nav::Nav;
 use notify::{RecommendedWatcher, Watcher};
 use notify_debouncer_full::FileIdMap;
 use polars::prelude::AnyValue;
@@ -12,8 +12,7 @@ use source::Source;
 use tab::Tab;
 use tui::{
     crossterm::event::{Event, KeyCode, KeyEventKind},
-    unicode_width::UnicodeWidthStr,
-    Canvas, Terminal,
+    Canvas, Terminal, unicode_width::UnicodeWidthStr,
 };
 
 mod describe;
@@ -21,9 +20,7 @@ pub mod error;
 mod event;
 mod fmt;
 mod grid;
-mod nav;
-mod projection;
-mod sizer;
+mod shell;
 pub mod source;
 mod style;
 mod tab;

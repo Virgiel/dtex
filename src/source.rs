@@ -131,6 +131,13 @@ pub struct Source {
 }
 
 impl Source {
+    pub fn empty() -> Self {
+        Self {
+            name: "#".into(),
+            kind: Kind::Eager(DataFrame::default())
+        }
+    }
+
     pub fn from_polars(df: DataFrame) -> Self {
         Self {
             name: "polars".into(),
@@ -186,14 +193,14 @@ impl Source {
     pub fn path(&self) -> Option<&Path> {
         match &self.kind {
             Kind::Eager(_) | Kind::Lazy(_) => None,
-            Kind::File { path, .. } => Some(&path),
+            Kind::File { path, .. } => Some(path),
         }
     }
 
     pub fn display_path(&self) -> Option<&str> {
         match &self.kind {
             Kind::Eager(_) | Kind::Lazy(_) => None,
-            Kind::File { display_path, .. } => Some(&display_path),
+            Kind::File { display_path, .. } => Some(display_path),
         }
     }
 

@@ -39,7 +39,7 @@ impl<T> Task<T> {
             Err(it) => match it {
                 oneshot::TryRecvError::Empty => Ok(None),
                 oneshot::TryRecvError::Disconnected => {
-                    Err(format!("Task failed without error").into())
+                    Err("Task failed without error".to_string().into())
                 }
             },
         }
