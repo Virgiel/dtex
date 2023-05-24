@@ -22,8 +22,8 @@ impl Tab {
         Self {
             grid: SourceGrid::new(source.clone(), orchestrator),
             state: State::Normal,
+            shell: Shell::new(source.sql()),
             source,
-            shell: Shell::new(),
         }
     }
 

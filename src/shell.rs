@@ -13,9 +13,9 @@ pub struct Shell {
 }
 
 impl Shell {
-    pub fn new() -> Self {
+    pub fn new(init: &str) -> Self {
         Self {
-            prompt: Prompt::new(""),
+            prompt: Prompt::new(init),
             offset: 0,
         }
     }
