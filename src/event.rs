@@ -4,7 +4,7 @@ use std::{
     time::Duration,
 };
 
-use notify::{FsEventWatcher, RecommendedWatcher};
+use notify::RecommendedWatcher;
 use notify_debouncer_full::{new_debouncer, FileIdMap};
 
 /// Task orchestrator that generate event on task completion

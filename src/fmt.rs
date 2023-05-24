@@ -1,6 +1,5 @@
 use std::fmt::{Display, Write};
 
-use bstr::ByteSlice;
 use tui::unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
 use crate::{utils::BStrWidth, Ty};

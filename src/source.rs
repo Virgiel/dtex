@@ -15,7 +15,6 @@ use crate::{
     error::Result,
     event::{Orchestrator, Task},
     utils::cache_regex,
-    Open,
 };
 
 const PRELOAD_LEN: usize = 1024;
@@ -108,17 +107,17 @@ impl Loader {
     }
 }
 
-pub enum Source {
-    Memory(DataFrame),
+enum Kind {
+    Eager(DataFrame),
+    Lazy(LazyFrame),
     File {
-        input: PathBuf,
         path: PathBuf,
+        display_path: String,
         kind: FileKind,
     },
-    Sql(String),
 }
 
-pub enum FileKind {
+enum FileKind {
     Csv,
     Json,
     Parquet,
@@ -126,66 +125,83 @@ pub enum FileKind {
     SQL,
 }
 
+pub struct Source {
+    name: String,
+    kind: Kind,
+}
+
 impl Source {
-    pub fn new(open: Open) -> Source {
-        match open {
-            Open::Polars(df) => Self::Memory(df),
-            Open::File(path) => {
-                let extension = path
-                    .extension()
-                    .unwrap_or_default()
-                    .to_str()
-                    .unwrap_or_default();
-                let kind = match extension {
-                    "csv" | "tsv" => FileKind::Csv,
-                    "json" | "ndjson" | "jsonl" | "ldjson" | "ldj" => FileKind::Json,
-                    "parquet" | "pqt" => FileKind::Parquet,
-                    "arrow" => FileKind::Arrow,
-                    "sql" => FileKind::SQL,
-                    unsupported => {
-                        panic!("Unsupported file extension .{unsupported}")
-                    }
-                };
-                Self::File {
-                    path: path.canonicalize().unwrap_or_else(|_| path.clone()),
-                    input: path,
-                    kind,
-                }
-            }
+    pub fn from_polars(df: DataFrame) -> Self {
+        Self {
+            name: "polars".into(),
+            kind: Kind::Eager(df),
         }
     }
 
-    pub fn name(&self) -> String {
-        match self {
-            Self::Memory(_) => "polars".to_string(),
-            Self::Sql(_) => "shell".to_string(),
-            Self::File { input, .. } => input
+    pub fn from_path(path: PathBuf) -> Result<Self> {
+        let extension = path
+            .extension()
+            .unwrap_or_default()
+            .to_str()
+            .unwrap_or_default();
+        let kind = match extension {
+            "csv" | "tsv" => FileKind::Csv,
+            "json" | "ndjson" | "jsonl" | "ldjson" | "ldj" => FileKind::Json,
+            "parquet" | "pqt" => FileKind::Parquet,
+            "arrow" => FileKind::Arrow,
+            "sql" => FileKind::SQL,
+            unsupported => return Err(format!("Unsupported file extension .{unsupported}").into()),
+        };
+
+        Ok(Self {
+            name: path
                 .file_stem()
                 .unwrap_or_default()
                 .to_string_lossy()
                 .to_string(),
+            kind: Kind::File {
+                display_path: path.to_string_lossy().to_string(),
+                path: path.canonicalize().unwrap_or(path),
+                kind,
+            },
+        })
+    }
+
+    pub fn from_sql(sql: &str, current: Option<&Self>) -> Result<Self> {
+        let mut ctx = polars::sql::SQLContext::new();
+        if let Some(current) = current {
+            ctx.register("current", current.lazy_frame(&Schema::new())?);
         }
+        let lazy = ctx.execute(sql)?;
+        Ok(Self {
+            name: "shell".into(),
+            kind: Kind::Lazy(lazy),
+        })
+    }
+
+    pub fn name(&self) -> &str {
+        &self.name
     }
 
     pub fn path(&self) -> Option<&Path> {
-        match self {
-            Self::Memory(_) | Self::Sql(_) => None,
-            Self::File { path, .. } => Some(path),
+        match &self.kind {
+            Kind::Eager(_) | Kind::Lazy(_) => None,
+            Kind::File { path, .. } => Some(&path),
         }
     }
 
-    pub fn display_path(&self) -> Option<String> {
-        match self {
-            Self::Memory(_) | Self::Sql(_) => None,
-            Self::File { input, .. } => Some(input.to_string_lossy().to_string()),
+    pub fn display_path(&self) -> Option<&str> {
+        match &self.kind {
+            Kind::Eager(_) | Kind::Lazy(_) => None,
+            Kind::File { display_path, .. } => Some(&display_path),
         }
     }
 
     /// Fast load of a in memory data frame
     fn sync_full(&self) -> Option<DataFrame> {
-        match self {
-            Self::Memory(p) => Some(p.clone()),
-            Self::File { .. } | Self::Sql(_) => None,
+        match &self.kind {
+            Kind::Eager(p) => Some(p.clone()),
+            Kind::File { .. } | Kind::Lazy(_) => None,
         }
     }
 
@@ -228,10 +244,10 @@ impl Source {
 
     /// Lazy frame from source
     fn lazy_frame(&self, schema: &Schema) -> Result<LazyFrame> {
-        Ok(match self {
-            Self::Memory(df) => df.clone().lazy(),
-            Self::Sql(sql) => polars::sql::SQLContext::new().execute(sql)?,
-            Self::File { path, kind, .. } => match kind {
+        Ok(match &self.kind {
+            Kind::Eager(df) => df.clone().lazy(),
+            Kind::Lazy(sql) => sql.clone(),
+            Kind::File { path, kind, .. } => match kind {
                 FileKind::Csv => {
                     let mut file = std::fs::File::open(path)?;
                     let delimiter = infer_cdv_delimiter(&mut file)?;
