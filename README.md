@@ -3,8 +3,5 @@
 ## TODO
 
 - Goto
-- Load full
-- Lazy preload
 - SQL files with multiple statements ? 
-- SQL shell 
-- Quit all 'Q'
+- SQL shell

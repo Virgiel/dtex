@@ -15,7 +15,10 @@ pub struct Args {
 fn main() {
     let args = Args::parse();
     dtex::run(
-        args.files.into_iter().map(dtex::Open::File).collect(),
-        args.sql.unwrap_or_default(),
+        args.files
+            .into_iter()
+            .map(dtex::source::Source::from_path)
+            .chain(args.sql.map(|s| dtex::source::Source::from_sql(&s, None)))
+            .map(|s| s.unwrap()),
     );
 }

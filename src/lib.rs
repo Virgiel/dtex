@@ -1,14 +1,13 @@
-use std::{borrow::Cow, io, path::PathBuf, time::Duration};
+use std::{borrow::Cow, io, time::Duration};
 
 use bstr::{BStr, BString};
-use event::{event_listener, Orchestrator};
+use event::event_listener;
 use fmt::rtrim;
 use nav::Nav;
 use notify::{RecommendedWatcher, Watcher};
 use notify_debouncer_full::FileIdMap;
-use polars::prelude::{AnyValue, DataFrame};
+use polars::prelude::AnyValue;
 use reedline::KeyModifiers;
-use shell::Shell;
 use source::Source;
 use tab::Tab;
 use tui::{
@@ -18,29 +17,23 @@ use tui::{
 };
 
 mod describe;
-mod error;
+pub mod error;
 mod event;
 mod fmt;
 mod grid;
 mod nav;
 mod projection;
-mod shell;
 mod sizer;
-mod source;
+pub mod source;
 mod style;
 mod tab;
 mod utils;
 
-pub enum Open {
-    Polars(DataFrame),
-    File(PathBuf),
-}
-
-pub fn run(source: Vec<Open>, sql: String) {
+pub fn run(sources: impl Iterator<Item = Source>) {
     let (receiver, watcher, orchestrator) = event_listener();
-    let mut app = App::new(watcher, orchestrator.clone(), sql);
-    for source in source {
-        app.add_tab(Tab::open(orchestrator.clone(), Source::new(source)));
+    let mut app = App::new(watcher);
+    for source in sources {
+        app.add_tab(Tab::open(orchestrator.clone(), source));
     }
     let mut terminal = Terminal::new(io::stdout()).unwrap();
     loop {
@@ -68,26 +61,18 @@ struct App {
     tabs: Vec<Tab>,
     nav: Nav,
     debouncer: notify_debouncer_full::Debouncer<RecommendedWatcher, FileIdMap>,
-    shell: Shell,
-    focus_shell: bool,
 }
 impl App {
-    pub fn new(
-        debouncer: notify_debouncer_full::Debouncer<RecommendedWatcher, FileIdMap>,
-        orchestrator: Orchestrator,
-        sql: String,
-    ) -> Self {
+    pub fn new(debouncer: notify_debouncer_full::Debouncer<RecommendedWatcher, FileIdMap>) -> Self {
         Self {
             tabs: vec![],
             nav: Nav::new(),
-            focus_shell: !sql.is_empty(),
-            shell: Shell::open(orchestrator, sql),
             debouncer,
         }
     }
 
     pub fn add_tab(&mut self, tab: Tab) {
-        if let Some(path) = tab.grid.source.path() {
+        if let Some(path) = tab.source.path() {
             self.debouncer
                 .watcher()
                 .watch(path, notify::RecursiveMode::NonRecursive)
@@ -98,9 +83,7 @@ impl App {
 
     pub fn draw(&mut self, c: &mut Canvas) {
         let mut coll_off_iter = self.nav.col_iter(self.tabs.len());
-        if self.focus_shell {
-            self.shell.draw(c);
-        } else if self.tabs.len() == 1 {
+        if self.tabs.len() == 1 {
             self.tabs[0].draw(c)
         } else if !self.tabs.is_empty() {
             let mut cols = Vec::new();
@@ -109,8 +92,8 @@ impl App {
             while remaining_width > cols.len() {
                 if let Some(off) = coll_off_iter.next() {
                     let tab = &self.tabs[off];
-                    remaining_width = remaining_width.saturating_sub(tab.name.width());
-                    cols.push((off, &tab.name));
+                    remaining_width = remaining_width.saturating_sub(tab.source.name().width());
+                    cols.push((off, tab.source.name()));
                 } else {
                     break;
                 }
@@ -137,9 +120,6 @@ impl App {
                 line.draw(" ", style::separator());
             }
             self.tabs[self.nav.c_col].draw(c)
-        } else {
-            self.focus_shell = true;
-            self.shell.draw(c);
         }
     }
 
@@ -169,28 +149,12 @@ impl App {
                     }
 
                     if pass {
-                        if self.focus_shell {
-                            match self.shell.on_key(&event) {
-                                tab::Status::Continue => {}
-                                tab::Status::Exit => {
-                                    if self.tabs.is_empty() {
-                                        return true;
-                                    } else {
-                                        self.focus_shell = false;
-                                    }
+                        if let Some(tab) = self.tabs.get_mut(self.nav.c_col) {
+                            if tab.on_key(&event) {
+                                if let Some(path) = tab.source.path() {
+                                    self.debouncer.watcher().unwatch(path).unwrap();
                                 }
-                                tab::Status::OpenShell => unreachable!(),
-                            }
-                        } else if let Some(tab) = self.tabs.get_mut(self.nav.c_col) {
-                            match tab.on_key(&event) {
-                                tab::Status::Continue => {}
-                                tab::Status::Exit => {
-                                    if let Some(path) = tab.grid.source.path() {
-                                        self.debouncer.watcher().unwatch(path).unwrap();
-                                    }
-                                    self.tabs.remove(self.nav.c_col);
-                                }
-                                tab::Status::OpenShell => self.focus_shell = true,
+                                self.tabs.remove(self.nav.c_col);
                             }
                         }
                     }
@@ -207,9 +171,9 @@ impl App {
                                     if let Some(tab) = self
                                         .tabs
                                         .iter_mut()
-                                        .find(|t| t.grid.source.path() == Some(path.as_path()))
+                                        .find(|t| t.source.path() == Some(path.as_path()))
                                     {
-                                        tab.set_source(Source::new(Open::File(path)))
+                                        tab.set_source(Source::from_path(path).unwrap())
                                     }
                                 }
                             }
@@ -220,7 +184,7 @@ impl App {
             }
             event::Event::Task => {}
         }
-        self.tabs.is_empty() && !self.focus_shell
+        self.tabs.is_empty()
     }
 
     fn is_loading(&self) -> bool {
@@ -229,6 +193,16 @@ impl App {
         //self.tabs[self.nav.c_col].is_loading()
     }
 }
+
+#[derive(PartialEq, Eq)]
+pub enum OnKey {
+    // Exit current state
+    Quit,
+    // Pass the event down
+    Pass,
+    Continue,
+}
+
 pub enum Ty<'a> {
     Null,
     Bool(bool),
