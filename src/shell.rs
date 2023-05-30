@@ -3,8 +3,12 @@ use tui::{crossterm::event::KeyEvent, unicode_width::UnicodeWidthChar, Canvas};
 
 use crate::{style, OnKey};
 
-use self::prompt::{Prompt, PromptCmd};
+use self::{
+    highlighter::Highlighter,
+    prompt::{Prompt, PromptCmd},
+};
 
+mod highlighter;
 mod prompt;
 
 pub struct Shell {
@@ -49,7 +53,7 @@ impl Shell {
         let mut l = c.btm();
         l.draw("$ ", style::separator());
         let (str, cursor) = self.prompt.state();
-        //let mut highlighter = Highlighter::new(str);
+        let mut highlighter = Highlighter::new(str);
         let mut pending_cursor = true;
 
         let mut w = l.width();
@@ -104,17 +108,7 @@ impl Shell {
                 l.cursor();
                 pending_cursor = false
             }
-            l.draw(
-                c,
-                tui::none(), /*match highlighter.style(i) {
-                                 Style::None | Style::Logi => none(),
-                                 Style::Id => none().fg(Color::Blue),
-                                 Style::Nb => none().fg(Color::Yellow),
-                                 Style::Str => none().fg(Color::Green),
-                                 Style::Regex => none().fg(Color::Magenta),
-                                 Style::Action => none().fg(Color::Red),
-                             }*/
-            );
+            l.draw(c, highlighter.style(i as u64));
         }
         if pending_cursor {
             l.cursor();
