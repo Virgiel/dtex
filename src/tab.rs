@@ -3,7 +3,10 @@ use std::sync::Arc;
 use reedline::KeyCode;
 use tui::{crossterm::event::KeyEvent, Canvas};
 
-use crate::{event::Orchestrator, grid::SourceGrid, shell::Shell, source::Source, style, OnKey};
+use crate::{
+    event::Orchestrator, grid::SourceGrid, shell::Shell, source::Source, spinner::Spinner, style,
+    OnKey,
+};
 
 enum State {
     Normal,
@@ -14,6 +17,7 @@ pub struct Tab {
     pub source: Arc<Source>,
     shell: Shell,
     state: State,
+    spinner: Spinner,
 }
 
 impl Tab {
@@ -24,6 +28,7 @@ impl Tab {
             state: State::Normal,
             shell: Shell::new(source.sql()),
             source,
+            spinner: Spinner::new(),
         }
     }
 
@@ -60,7 +65,11 @@ impl Tab {
         l.draw(status, style);
         l.draw(" ", style::primary());
         if let Some(task) = self.grid.is_loading() {
-            l.rdraw(format_args!("{task}..."), style::progress());
+            if let Some(c) = self.spinner.state(true) {
+                l.rdraw(format_args!(" {task}{c}"), style::progress());
+            }
+        } else {
+            self.spinner.state(false);
         }
         l.rdraw(format_args!(" {progress:>3}%"), style::primary());
         if let Some(name) = col_name {
