@@ -92,7 +92,7 @@ impl Frame for Description {
 pub fn describe(source: &Source) -> crate::error::Result<Description> {
     source.apply(|l| {
         let mut df = l.collect()?.describe(None)?;
-        df.rechunk();
+        df.as_single_chunk();
         Ok(Description {
             types: df
                 .get_columns()
