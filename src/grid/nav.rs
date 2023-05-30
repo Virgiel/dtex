@@ -73,8 +73,8 @@ impl Nav {
     }
 
     pub fn win_down(&mut self) {
-        self.o_row = self.o_row.saturating_add(self.v_row);
-        self.c_row = self.o_row + self.v_row.saturating_sub(1);
+        self.o_row += self.v_row;
+        self.c_row = self.o_row;
     }
 
     pub fn win_left(&mut self) {
@@ -83,8 +83,8 @@ impl Nav {
     }
 
     pub fn win_right(&mut self) {
-        self.o_col = self.o_col.saturating_add(self.v_col);
-        self.c_col = self.o_col + self.v_col.saturating_sub(1);
+        self.o_col +=  self.v_col;
+        self.c_col = self.o_col;
     }
 
     pub fn row_offset(&mut self, nb_row: usize, v_row: usize) -> usize {
@@ -115,30 +115,31 @@ impl Nav {
         // Reset view dimension
         self.v_col = 0;
 
-        let amount_right = nb_col - self.c_col;
-        let goal_left = self.c_col.saturating_sub(self.o_col);
+        let mut l_c = self.c_col;
+        let mut l_r = self.c_col + 1;
+        let goal = self.o_col;
+        self.o_col = usize::MAX;
 
         // Coll offset iterator
         std::iter::from_fn(move || -> Option<usize> {
             if self.v_col < nb_col {
-                let step = self.v_col;
-                self.v_col += 1;
-                let result = if step <= goal_left {
-                    // Reach goal
-                    self.c_col - step
-                } else if step < goal_left + amount_right {
+                let pos;
+                if l_c >= goal && l_c < nb_col {
+                    // Reach previous offset
+                    pos = l_c;
+                    l_c = l_c.wrapping_sub(1);
+                } else if l_r < nb_col {
                     // Then fill right
-                    self.c_col + (step - goal_left)
+                    pos = l_r;
+                    l_r += 1;
                 } else {
                     // Then fill left
-                    self.c_col - (step - goal_left - amount_right)
+                    pos = l_c;
+                    l_c = l_c.wrapping_sub(1);
                 };
-                if result < self.o_col {
-                    self.o_col = result;
-                } else if result > self.o_col + step {
-                    self.o_col = result - step;
-                }
-                Some(result)
+                self.o_col = self.o_col.min(pos);
+                self.v_col += 1;
+                Some(pos)
             } else {
                 None
             }

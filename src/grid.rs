@@ -145,7 +145,7 @@ impl Frame for polars::prelude::DataFrame {
     }
 
     fn idx_iter(&self) -> Box<dyn Iterator<Item = Ty>> {
-        Box::new((0..self.height()).map(|n| Ty::U64(n as u64)))
+        Box::new((0..self.height()).map(|n| Ty::U64(n as u64 + 1)))
     }
 
     fn col_name(&self, idx: usize) -> &str {
