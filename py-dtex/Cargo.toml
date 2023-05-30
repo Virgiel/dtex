@@ -6,8 +6,7 @@ edition = "2018"
 [dependencies]
 pyo3 = { version = "0.18.3", features = ["extension-module"] }
 dtex = { path = ".." }
-pyo3-polars = "0.3.0"
-polars = "0.29.0"
+pyo3-polars = "0.4.0"
 
 [lib]
 name = "dtex"

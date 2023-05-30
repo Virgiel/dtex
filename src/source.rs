@@ -95,7 +95,10 @@ impl Loader {
                     Ok(true)
                 }
                 Ok(None) => Ok(false),
-                Err(it) => Err(it),
+                Err(it) => {
+                    self.task = None;
+                    Err(it)
+                }
             }
         } else {
             Ok(false)
@@ -125,7 +128,7 @@ enum FileKind {
     Json,
     Parquet,
     Arrow,
-    SQL,
+    Sql,
 }
 
 pub struct Source {
@@ -159,7 +162,7 @@ impl Source {
             "json" | "ndjson" | "jsonl" | "ldjson" | "ldj" => FileKind::Json,
             "parquet" | "pqt" => FileKind::Parquet,
             "arrow" => FileKind::Arrow,
-            "sql" => FileKind::SQL,
+            "sql" => FileKind::Sql,
             unsupported => return Err(format!("Unsupported file extension .{unsupported}").into()),
         };
 
@@ -281,7 +284,7 @@ impl Source {
                 }
                 FileKind::Parquet => LazyFrame::scan_parquet(path, ScanArgsParquet::default())?,
                 FileKind::Arrow => LazyFrame::scan_ipc(path, ScanArgsIpc::default())?,
-                FileKind::SQL => {
+                FileKind::Sql => {
                     let sql = std::fs::read_to_string(path)?;
                     let mut ctx = polars::sql::SQLContext::new();
                     ctx.execute(&sql)?

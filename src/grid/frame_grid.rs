@@ -8,7 +8,12 @@ use crate::{
     OnKey, Ty,
 };
 
-use super::{Frame, projection::{Projection, self}, sizer::{Sizer, self}, nav::Nav};
+use super::{
+    nav::Nav,
+    projection::{self, Projection},
+    sizer::{self, Sizer},
+    Frame,
+};
 
 enum State {
     Normal,
@@ -41,7 +46,7 @@ impl FrameGrid {
                 KeyCode::Char('s') => {
                     self.state = State::Size;
                 }
-                KeyCode::Char('m') => {
+                KeyCode::Char('p') => {
                     self.state = State::Projection;
                 }
                 KeyCode::Char('g') => self.nav.top(),
@@ -136,18 +141,18 @@ impl FrameGrid {
         let (ids, mut id_stat) = size_col(df.idx_iter(), row_off, v_row);
         id_stat.align_right();
         // Whole canvas minus index col
-        let mut remaining_width = c.width() - id_stat.budget();
+        let mut remaining_width = c.width() - id_stat.budget() - 1;
         let mut cols = Vec::new();
         let mut coll_off_iter = self.nav.col_iter(visible_cols);
         // Fill canvas with columns
-        while remaining_width > cols.len() {
+        while remaining_width > 0 {
             if let Some(off) = coll_off_iter.next() {
                 let idx = self.projection.project(off);
                 let name = df.col_name(idx);
                 let (fields, stat) = size_col(df.col_iter(idx), row_off, v_row);
                 let size = self.sizer.size(idx, stat.budget(), name.width());
-                let allowed = size.min(remaining_width - cols.len());
-                remaining_width = remaining_width.saturating_sub(allowed);
+                let allowed = size.min(remaining_width);
+                remaining_width = remaining_width.saturating_sub(allowed + 1); // +1 for the separator
                 cols.push((off, name, fields, stat, allowed));
             } else {
                 break;

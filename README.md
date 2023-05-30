@@ -3,5 +3,4 @@
 ## TODO
 
 - Goto
-- SQL files with multiple statements ? 
-- SQL shell
+- Progressive loading
