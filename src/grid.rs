@@ -51,9 +51,9 @@ impl SourceGrid {
 
     pub fn is_loading(&self) -> Option<&'static str> {
         if self.description.is_loading() {
-            Some("describing")
+            Some("describe")
         } else if self.loader.is_loading() {
-            Some("loading")
+            Some("load")
         } else {
             None
         }

@@ -1,4 +1,4 @@
-use std::{borrow::Cow, io, time::Duration};
+use std::{borrow::Cow, io, sync::mpsc::RecvTimeoutError, time::Duration};
 
 use bstr::{BStr, BString};
 use event::event_listener;
@@ -12,7 +12,8 @@ use source::Source;
 use tab::Tab;
 use tui::{
     crossterm::event::{Event, KeyCode, KeyEventKind},
-    Canvas, Terminal, unicode_width::UnicodeWidthStr,
+    unicode_width::UnicodeWidthStr,
+    Canvas, Terminal,
 };
 
 mod describe;
@@ -22,6 +23,7 @@ mod fmt;
 mod grid;
 mod shell;
 pub mod source;
+mod spinner;
 mod style;
 mod tab;
 mod utils;
@@ -36,20 +38,24 @@ pub fn run(sources: impl Iterator<Item = Source>) {
     loop {
         terminal.draw(|c| app.draw(c)).unwrap();
         let mut event = if app.is_loading() {
-            receiver.recv_timeout(Duration::from_millis(2500)).unwrap()
+            match receiver.recv_timeout(Duration::from_millis(250)) {
+                Ok(e) => Some(e),
+                Err(err) => match err {
+                    RecvTimeoutError::Timeout => None,
+                    RecvTimeoutError::Disconnected => {
+                        panic!("{err}")
+                    }
+                },
+            }
         } else {
-            receiver.recv().unwrap()
+            Some(receiver.recv().unwrap())
         };
-        loop {
-            if app.on_event(event) {
+        while let Some(e) = event {
+            if app.on_event(e) {
                 return;
             }
             // Ingest more event before drawing if we can
-            if let Ok(more) = receiver.try_recv() {
-                event = more;
-            } else {
-                break;
-            }
+            event = receiver.try_recv().ok()
         }
     }
 }
@@ -185,9 +191,7 @@ impl App {
     }
 
     fn is_loading(&self) -> bool {
-        false
-        //self.shell.is_loading()
-        //self.tabs[self.nav.c_col].is_loading()
+        self.tabs[self.nav.c_col].is_loading()
     }
 }
 
