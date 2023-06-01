@@ -13,15 +13,8 @@ reedline = "0.19.1"
 # Temporary file
 tempfile = "3.5.0"
 # DataFrame engine
-polars = { version = "0.30.0", features = [
-    "performant",
-    "json",
-    "ipc",
-    "parquet",
-    "lazy",
-    "sql",
-    "describe"
-] }
+polars = { version = "0.30.0", features = ["rows"], default-features = false }
+arrow2 = { version = "0.17.2", features = ["arrow"] }
 # Binary string helper
 bstr = "1.5.0"
 # Fast lexical conversion
@@ -30,8 +23,6 @@ lexical-core = "0.8.5"
 chrono = "0.4.25"
 # CLI args parser
 clap = { version = "4.3.0", features = ["derive"] }
-# Regular expression lib
-regex = "1.8.3"
 # Efficient oneshot channel
 oneshot = "0.1.5"
 # Lazy values
@@ -41,6 +32,11 @@ notify = "6.0.0"
 notify-debouncer-full = "0.1.0"
 # Sql parser
 sqlparser = "0.34.0"
+libduckdb-sys = { git = "https://github.com/Virgiel/duckdb-rs-tmp", features = [
+    "parquet",
+    "json",
+] }
+arrow = { version = "39.0.0", features = ["ffi"], default-features = false }
 
 [workspace]
 members = ["py-dtex"]

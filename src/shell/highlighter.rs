@@ -1,5 +1,4 @@
-use polars::sql::keywords::{all_functions, all_keywords};
-use sqlparser::{dialect::GenericDialect, keywords::Keyword, tokenizer::Token};
+use sqlparser::{dialect::DuckDbDialect, keywords::Keyword, tokenizer::Token};
 use tui::{none, Color, Style};
 
 pub struct Highlighter {
@@ -13,7 +12,7 @@ impl Highlighter {
             styles: vec![(0, tui::none())],
             idx: 0,
         };
-        for token in sqlparser::tokenizer::Tokenizer::new(&GenericDialect::default(), query)
+        for token in sqlparser::tokenizer::Tokenizer::new(&DuckDbDialect::default(), query)
             .tokenize_with_location()
             .unwrap_or_default()
         {
@@ -63,8 +62,6 @@ impl Highlighter {
                         | Keyword::IN
                         | Keyword::WITH => none().fg(Color::Magenta),
                         _ => match w.to_string().as_str() {
-                            s if all_functions().contains(&s) => none().fg(Color::Cyan),
-                            s if all_keywords().contains(&s) => none().fg(Color::Magenta),
                             "current" => none().fg(Color::Green),
                             _ => none(),
                         },

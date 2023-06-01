@@ -89,7 +89,7 @@ impl Tab {
             },
             State::Shell => {
                 if let OnKey::Quit = self.shell.on_key(event, |str| {
-                    match Source::from_sql(str, Some(&self.source)) {
+                    match Source::from_sql(str, Some(self.source.clone())) {
                         Ok(source) => {
                             self.grid.set_source(Arc::new(source));
                             true

@@ -3,3 +3,5 @@
 *.log
 ./*.csv
 **/node_modules
+*.csv
+*.csv.gz

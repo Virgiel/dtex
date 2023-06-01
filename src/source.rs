@@ -1,20 +1,14 @@
 use std::{
-    fs::File,
-    io::{BufRead, BufReader},
-    panic::AssertUnwindSafe,
     path::{Path, PathBuf},
     sync::Arc,
 };
 
-use polars::prelude::{
-    DataFrame, IntoLazy, LazyCsvReader, LazyFileListReader, LazyFrame, LazyJsonLineReader,
-    ScanArgsIpc, ScanArgsParquet, Schema,
-};
+use polars::prelude::DataFrame;
 
 use crate::{
+    duckdb::Connection,
     error::Result,
     event::{Orchestrator, Task},
-    utils::cache_regex,
 };
 
 const PRELOAD_LEN: usize = 1024;
@@ -113,22 +107,13 @@ impl Loader {
 enum Kind {
     Eager(DataFrame),
     Sql {
-        lf: LazyFrame,
+        current: Option<Arc<Source>>,
         sql: String,
     },
     File {
         path: PathBuf,
         display_path: String,
-        kind: FileKind,
     },
-}
-
-enum FileKind {
-    Csv,
-    Json,
-    Parquet,
-    Arrow,
-    Sql,
 }
 
 pub struct Source {
@@ -152,19 +137,8 @@ impl Source {
     }
 
     pub fn from_path(path: PathBuf) -> Result<Self> {
-        let extension = path
-            .extension()
-            .unwrap_or_default()
-            .to_str()
-            .unwrap_or_default();
-        let kind = match extension {
-            "csv" | "tsv" => FileKind::Csv,
-            "json" | "ndjson" | "jsonl" | "ldjson" | "ldj" => FileKind::Json,
-            "parquet" | "pqt" => FileKind::Parquet,
-            "arrow" => FileKind::Arrow,
-            "sql" => FileKind::Sql,
-            unsupported => return Err(format!("Unsupported file extension .{unsupported}").into()),
-        };
+        let con = Connection::mem()?;
+        con.execute(&format!("CREATE VIEW current AS SELECT * FROM {path:?}"))?;
 
         Ok(Self {
             name: path
@@ -175,23 +149,38 @@ impl Source {
             kind: Kind::File {
                 display_path: path.to_string_lossy().to_string(),
                 path: path.canonicalize().unwrap_or(path),
-                kind,
             },
         })
     }
 
-    pub fn from_sql(sql: &str, current: Option<&Self>) -> Result<Self> {
-        let mut ctx = polars::sql::SQLContext::new();
-        if let Some(current) = current {
-            ctx.register("current", current.lazy_frame(&Schema::new())?);
-        }
-        let lf = ctx.execute(sql)?;
+    pub fn from_sql(sql: &str, current: Option<Arc<Self>>) -> Result<Self> {
         Ok(Self {
             name: "shell".into(),
             kind: Kind::Sql {
-                lf,
-                sql: sql.into(),
+                sql: sql.to_string(),
+                current,
             },
+        })
+    }
+
+    fn con(&self) -> Result<Connection> {
+        Ok(match &self.kind {
+            Kind::Eager(df) => {
+                let con = Connection::mem()?;
+                con.bind_arrow("current", df)?;
+                con
+            }
+            Kind::Sql { current, .. } => match current {
+                Some(it) => it.con()?,
+                None => Connection::mem()?,
+            },
+            Kind::File { display_path, .. } => {
+                let con = Connection::mem()?;
+                con.execute(&format!(
+                    "CREATE VIEW current AS SELECT * FROM '{display_path}'"
+                ))?;
+                con
+            }
         })
     }
 
@@ -228,100 +217,36 @@ impl Source {
         }
     }
 
-    /// Automatic schema inference
-    pub fn apply<T>(&self, lambda: impl Fn(LazyFrame) -> Result<T>) -> Result<T> {
-        let mut schema = Schema::new();
-        loop {
-            // polars can panic
-            let result: Result<T> = std::panic::catch_unwind(AssertUnwindSafe(|| {
-                let lazy = self.lazy_frame(&schema)?;
-                lambda(lazy)
-            }))
-            .map_err(|_| "polars failure")?;
-
-            match result {
-                Ok(df) => return Ok(df),
-                Err(err) => {
-                    let reg = cache_regex!("Could not parse `.*` as dtype `.*` at column '(.*)'");
-                    if let Some(ma) = reg.captures(&err.0) {
-                        schema.with_column(
-                            ma.get(1).unwrap().as_str().into(),
-                            polars::prelude::DataType::Utf8,
-                        );
-                    } else {
-                        return Err(err);
-                    }
-                }
-            }
-        }
+    pub fn describe(&self) -> Result<DataFrame> {
+        let sql = match &self.kind {
+            Kind::Sql { sql, .. } => format!("SUMMARIZE {sql}"),
+            Kind::Eager(_) | Kind::File { .. } => format!("SUMMARIZE SELECT * FROM current"),
+        };
+        let df = self.con()?.frame(&sql)?;
+        Ok(df)
     }
 
     /// Load up to `limit` rows handling schema errors
-    fn load(&self, limit: Option<usize>) -> Result<DataFrame> {
-        self.apply(|lazy| {
-            Ok(lazy
-                .limit(limit.map(|n| n as u32).unwrap_or(u32::MAX))
-                .collect()?)
-        })
+    pub fn load(&self, limit: Option<usize>) -> Result<DataFrame> {
+        let sql = match &self.kind {
+            Kind::Eager(df) => return Ok(df.clone()),
+            Kind::Sql { sql, .. } => sql,
+            Kind::File { .. } => "SELECT * FROM current",
+        };
+        let mut limit = limit.unwrap_or(usize::MAX);
+        let chunks = self.con()?.chunks(sql)?;
+        let df = chunks
+            .map(|d| d.unwrap())
+            .take_while(|d| {
+                let taken = limit > 0;
+                limit = limit.saturating_sub(d.height());
+                taken
+            })
+            .reduce(|mut a, b| {
+                a.extend(&b).unwrap();
+                a
+            })
+            .unwrap_or_default();
+        Ok(df)
     }
-
-    /// Lazy frame from source
-    fn lazy_frame(&self, schema: &Schema) -> Result<LazyFrame> {
-        Ok(match &self.kind {
-            Kind::Eager(df) => df.clone().lazy(),
-            Kind::Sql { lf, .. } => lf.clone(),
-            Kind::File { path, kind, .. } => match kind {
-                FileKind::Csv => {
-                    let mut file = std::fs::File::open(path)?;
-                    let delimiter = infer_cdv_delimiter(&mut file)?;
-                    LazyCsvReader::new(path)
-                        .with_dtype_overwrite(Some(schema))
-                        .with_delimiter(delimiter)
-                        .finish()?
-                }
-                FileKind::Json => {
-                    LazyJsonLineReader::new(path.to_string_lossy().to_string()).finish()?
-                }
-                FileKind::Parquet => LazyFrame::scan_parquet(path, ScanArgsParquet::default())?,
-                FileKind::Arrow => LazyFrame::scan_ipc(path, ScanArgsIpc::default())?,
-                FileKind::Sql => {
-                    let sql = std::fs::read_to_string(path)?;
-                    let mut ctx = polars::sql::SQLContext::new();
-                    ctx.execute(&sql)?
-                }
-            },
-        })
-    }
-}
-
-fn infer_cdv_delimiter(file: &mut File) -> std::io::Result<u8> {
-    const DELIMITER: [u8; 4] = [b',', b';', b':', b'|'];
-    let mut counter = [0; DELIMITER.len()];
-    let mut file = BufReader::new(file);
-
-    'main: loop {
-        let buff = file.fill_buf()?;
-        if buff.is_empty() {
-            break 'main;
-        }
-        for c in buff {
-            if *c == b'\n' {
-                break 'main;
-            }
-            // Count occurrence of delimiter char
-            if let Some((count, _)) = counter.iter_mut().zip(DELIMITER).find(|(_, d)| d == c) {
-                *count += 1;
-            }
-        }
-        let amount = buff.len();
-        file.consume(amount);
-    }
-
-    // Return most used delimiter or ',' by default
-    Ok(counter
-        .iter()
-        .zip(DELIMITER)
-        .max_by_key(|(c, _)| *c)
-        .map(|(_, d)| d)
-        .unwrap_or(DELIMITER[0]))
 }
