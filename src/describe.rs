@@ -54,52 +54,31 @@ impl Describer {
     }
 }
 
-pub struct Description {
-    df: polars::prelude::DataFrame,
-    types: Vec<String>,
-}
+pub struct Description(polars::prelude::DataFrame);
 
 impl Frame for Description {
     fn nb_col(&self) -> usize {
-        self.df.nb_col() - 1
+        self.0.nb_col() - 1
     }
 
     fn nb_row(&self) -> usize {
-        self.df.nb_row() + 1
+        self.0.nb_row()
     }
 
     fn idx_iter(&self) -> Box<dyn Iterator<Item = crate::Ty> + '_> {
-        Box::new(
-            ["type".into()]
-                .into_iter()
-                .chain(self.df.get_columns()[0].phys_iter().map(Into::into)),
-        )
+        Box::new(self.0.get_columns()[0].phys_iter().map(Into::into))
     }
 
     fn col_name(&self, idx: usize) -> &str {
-        self.df.get_columns()[idx + 1].name()
+        self.0.get_columns()[idx + 1].name()
     }
 
     fn col_iter(&self, idx: usize) -> Box<dyn Iterator<Item = crate::Ty> + '_> {
-        Box::new(
-            [self.types[idx].as_str().into()]
-                .into_iter()
-                .chain(self.df.get_columns()[idx + 1].phys_iter().map(Into::into)),
-        )
+        Box::new(self.0.get_columns()[idx + 1].phys_iter().map(Into::into))
     }
 }
 
 pub fn describe(source: &Source) -> crate::error::Result<Description> {
-    source.apply(|l| {
-        let mut df = l.collect()?.describe(None)?;
-        df.as_single_chunk();
-        Ok(Description {
-            types: df
-                .get_columns()
-                .iter()
-                .map(|s| s.dtype().to_string())
-                .collect(),
-            df,
-        })
-    })
+    let df = source.describe()?;
+    Ok(Description(df))
 }

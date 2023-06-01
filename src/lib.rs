@@ -1,6 +1,7 @@
 use std::{borrow::Cow, io, sync::mpsc::RecvTimeoutError, time::Duration};
 
 use bstr::{BStr, BString};
+use duckdb::Connection;
 use event::event_listener;
 use fmt::rtrim;
 use grid::nav::Nav;
@@ -17,6 +18,7 @@ use tui::{
 };
 
 mod describe;
+mod duckdb;
 pub mod error;
 mod event;
 mod fmt;
@@ -27,6 +29,20 @@ mod spinner;
 mod style;
 mod tab;
 mod utils;
+
+pub fn test() -> polars::prelude::DataFrame {
+    let conn = Connection::mem().unwrap();
+    let frame = conn.frame("SELECT * FROM 'data/postcode.csv'").unwrap();
+    dbg!(&frame);
+    conn.bind_arrow("current", &frame).unwrap();
+    dbg!("test");
+    let after = conn.frame("SELECT * FROM current").unwrap();
+
+    dbg!(&after);
+
+    assert_eq!(frame, after);
+    after
+}
 
 pub fn run(sources: impl Iterator<Item = Source>) {
     let (receiver, watcher, orchestrator) = event_listener();
@@ -244,13 +260,7 @@ impl<'a> From<AnyValue<'a>> for Ty<'a> {
             AnyValue::Utf8Owned(str) => Ty::Str(Cow::Owned(BString::new(str.as_bytes().to_vec()))),
             AnyValue::Binary(bs) => Ty::Str(Cow::Borrowed(BStr::new(bs))),
             AnyValue::BinaryOwned(bs) => Ty::Str(Cow::Owned(BString::new(bs))),
-            AnyValue::Date(_) => todo!(),
-            AnyValue::Datetime(_, _, _) => todo!(),
-            AnyValue::Duration(_, _) => todo!(),
-            AnyValue::Time(_) => todo!(),
             AnyValue::List(_) => todo!(),
-            AnyValue::Struct(_, _, _) => todo!(),
-            AnyValue::StructOwned(_) => todo!(),
         }
     }
 }
