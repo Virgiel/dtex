@@ -145,7 +145,7 @@ impl Frame for DataFrame {
     }
 
     fn idx_iter(&self, skip: usize) -> Box<dyn Iterator<Item = Ty>> {
-        Box::new((skip..self.num_rows()).map(|n| Ty::U64(n as u64 + 1)))
+        Box::new((skip..self.num_rows()).map(|n| Ty::U(n as u64 + 1)))
     }
 
     fn col_name(&self, idx: usize) -> String {

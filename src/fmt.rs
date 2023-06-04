@@ -48,9 +48,9 @@ impl ColStat {
                     self.is_str = true;
                 }
             }
-            Ty::U64(nb) => self.size_nb(*nb),
-            Ty::I64(nb) => self.size_nb(*nb),
-            Ty::F64(nb) => self.size_nb(*nb),
+            Ty::U(nb) => self.size_nb(*nb),
+            Ty::I(nb) => self.size_nb(*nb),
+            Ty::F(nb) => self.size_nb(*nb),
         }
     }
 
@@ -72,7 +72,7 @@ pub fn fmt_field<'a>(buf: &'a mut String, ty: &Ty, stat: &ColStat, budget: usize
         }
     }
     // Align left numerical values
-    if matches!(ty, Ty::U64(_) | Ty::I64(_) | Ty::F64(_)) {
+    if matches!(ty, Ty::U(_) | Ty::I(_) | Ty::F(_)) {
         pad(buf, budget.saturating_sub(stat.max_lhs + stat.max_rhs))
     }
     // Write value
@@ -89,9 +89,9 @@ pub fn fmt_field<'a>(buf: &'a mut String, ty: &Ty, stat: &ColStat, budget: usize
         Ty::Str(str) if stat.align_right => write!(buf, "{str:>0$}", stat.budget()).unwrap(),
         Ty::Str(str) => write!(buf, "{str}").unwrap(),
         Ty::Null => { /* TODO grey null ? */ }
-        Ty::U64(nb) => write_nb(buf, stat, *nb),
-        Ty::I64(nb) => write_nb(buf, stat, *nb),
-        Ty::F64(nb) => write_nb(buf, stat, *nb),
+        Ty::U(nb) => write_nb(buf, stat, *nb),
+        Ty::I(nb) => write_nb(buf, stat, *nb),
+        Ty::F(nb) => write_nb(buf, stat, *nb),
     };
     // Fill remaining budget
     pad(buf, budget.saturating_sub(buf.width()));
