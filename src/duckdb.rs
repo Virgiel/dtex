@@ -20,7 +20,7 @@ use libduckdb_sys::{
     duckdb_result_get_chunk, duckdb_result_is_streaming, duckdb_stream_fetch_chunk, DuckDBSuccess,
 };
 
-use crate::source::{DataFrame, DataFrameRef};
+use crate::source::DataFrameRef;
 
 #[derive(Debug)]
 pub enum Error {
@@ -29,7 +29,6 @@ pub enum Error {
     Prepare(String),
     Execute(String),
     Chunk(String),
-    Bind(String),
     Unknown,
 }
 
@@ -41,7 +40,6 @@ impl Display for Error {
             Error::Prepare(msg) => writeln!(f, "open: {msg}"),
             Error::Execute(msg) => writeln!(f, "open: {msg}"),
             Error::Chunk(msg) => writeln!(f, "open: {msg}"),
-            Error::Bind(msg) => writeln!(f, "bind: {msg}"),
             Error::Unknown => writeln!(f, "unknown"),
         }
     }
@@ -134,35 +132,6 @@ impl Connection {
             }
         }
         Ok(Self { _db: db, con })
-    }
-
-    pub fn bind_arrow(&self, name: &str, frame: &DataFrame) -> Result<()> {
-        return Err(Error::Bind("Not yet supported".into()));
-        /*
-        let schema = FFI_ArrowSchema::try_from(frame.schema().as_ref()).unwrap();
-        let struct_array = StructArray::from(frame.clone());
-        let array = FFI_ArrowArray::new(&struct_array.to_data());
-        let array = Box::into_raw(Box::new(array));
-        let schema = Box::into_raw(Box::new(schema));
-        let mut stream = std::ptr::null_mut();
-
-        unsafe {
-            if duckdb_arrow_array_scan(
-                self.con,
-                name.as_ptr() as *mut _,
-                schema as *mut _,
-                array as *mut _,
-                &mut stream,
-            ) != DuckDBSuccess
-            {
-                return Err(Error::Unknown);
-            }
-            let stream = Box::from_raw(stream as *mut FFI_ArrowArrayStream);
-            Box::leak(stream); // TODO finalize handle stream
-            std::thread::sleep(Duration::from_millis(10000));
-        }
-        */
-        Ok(())
     }
 
     pub fn execute(&self, query: &str) -> Result<()> {

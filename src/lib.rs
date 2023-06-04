@@ -1,7 +1,7 @@
 use std::{borrow::Cow, io, sync::mpsc::RecvTimeoutError, time::Duration};
 
 use arrow::{
-    array::{ArrayRef, AsArray},
+    array::{ArrayRef, AsArray, Decimal128Array},
     datatypes::{
         DataType, Float16Type, Float32Type, Float64Type, Int16Type, Int32Type, Int64Type, Int8Type,
         UInt16Type, UInt32Type, UInt64Type, UInt8Type,
@@ -217,9 +217,9 @@ pub enum Ty<'a> {
     Null,
     Bool(bool),
     Str(Cow<'a, BStr>),
-    U64(u64),
-    I64(i64),
-    F64(f64),
+    U(u64),
+    I(i128),
+    F(f64),
 }
 
 impl Ty<'_> {
@@ -243,23 +243,23 @@ macro_rules! iter {
 pub fn array_to_iter(array: &ArrayRef) -> Box<dyn Iterator<Item = Ty<'_>> + '_> {
     match array.data_type() {
         DataType::Null => Box::new((0..array.len()).map(|_| Ty::Null)),
-        DataType::Boolean => iter!(array.as_boolean(), |v| Ty::Bool(v)),
-        DataType::Int8 => iter!(array.as_primitive::<Int8Type>(), |v| Ty::I64(v as i64)),
-        DataType::Int16 => iter!(array.as_primitive::<Int16Type>(), |v| Ty::I64(v as i64)),
-        DataType::Int32 => iter!(array.as_primitive::<Int32Type>(), |v| Ty::I64(v as i64)),
-        DataType::Int64 => iter!(array.as_primitive::<Int64Type>(), |v| Ty::I64(v as i64)),
-        DataType::UInt8 => iter!(array.as_primitive::<UInt8Type>(), |v| Ty::U64(v as u64)),
-        DataType::UInt16 => iter!(array.as_primitive::<UInt16Type>(), |v| Ty::U64(v as u64)),
-        DataType::UInt32 => iter!(array.as_primitive::<UInt32Type>(), |v| Ty::U64(v as u64)),
-        DataType::UInt64 => iter!(array.as_primitive::<UInt64Type>(), |v| Ty::U64(v as u64)),
+        DataType::Boolean => iter!(array.as_boolean(), Ty::Bool),
+        DataType::Int8 => iter!(array.as_primitive::<Int8Type>(), |v| Ty::I(v as i128)),
+        DataType::Int16 => iter!(array.as_primitive::<Int16Type>(), |v| Ty::I(v as i128)),
+        DataType::Int32 => iter!(array.as_primitive::<Int32Type>(), |v| Ty::I(v as i128)),
+        DataType::Int64 => iter!(array.as_primitive::<Int64Type>(), |v| Ty::I(v as i128)),
+        DataType::UInt8 => iter!(array.as_primitive::<UInt8Type>(), |v| Ty::U(v as u64)),
+        DataType::UInt16 => iter!(array.as_primitive::<UInt16Type>(), |v| Ty::U(v as u64)),
+        DataType::UInt32 => iter!(array.as_primitive::<UInt32Type>(), |v| Ty::U(v as u64)),
+        DataType::UInt64 => iter!(array.as_primitive::<UInt64Type>(), |v| Ty::U(v as u64)),
         DataType::Float16 => {
-            iter!(array.as_primitive::<Float16Type>(), |v| Ty::F64(v.to_f64()))
+            iter!(array.as_primitive::<Float16Type>(), |v| Ty::F(v.to_f64()))
         }
         DataType::Float32 => {
-            iter!(array.as_primitive::<Float32Type>(), |v| Ty::F64(v as f64))
+            iter!(array.as_primitive::<Float32Type>(), |v| Ty::F(v as f64))
         }
         DataType::Float64 => {
-            iter!(array.as_primitive::<Float64Type>(), |v| Ty::F64(v as f64))
+            iter!(array.as_primitive::<Float64Type>(), |v| Ty::F(v as f64))
         }
         DataType::Utf8 => {
             iter!(array.as_string::<i32>(), |v| Ty::Str(Cow::Borrowed(
@@ -269,6 +269,10 @@ pub fn array_to_iter(array: &ArrayRef) -> Box<dyn Iterator<Item = Ty<'_>> + '_> 
         DataType::LargeUtf8 => iter!(array.as_string::<i64>(), |v| Ty::Str(Cow::Borrowed(
             v.into()
         ))),
-        _ => todo!(),
+        DataType::Decimal128(_, _) => {
+            let array: &Decimal128Array = array.as_any().downcast_ref().unwrap();
+            iter!(array, |v| Ty::I(v as i128))
+        }
+        ty => unimplemented!("{ty}"),
     }
 }

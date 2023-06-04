@@ -4,10 +4,11 @@ use std::{
 };
 
 use arrow::{
-    array::{Array, ArrayRef},
     datatypes::{Schema, SchemaRef},
     record_batch::RecordBatch,
 };
+use once_cell::sync::OnceCell;
+use tempfile::NamedTempFile;
 
 use crate::{
     array_to_iter,
@@ -111,7 +112,10 @@ impl Loader {
 }
 
 enum Kind {
-    Eager(DataFrameRef),
+    Eager {
+        df: DataFrameRef,
+        parquet: OnceCell<NamedTempFile>, // TODO remove when using 'arrow_scan'
+    },
     Sql {
         current: Option<Arc<Source>>,
         sql: String,
@@ -129,16 +133,23 @@ pub struct Source {
 
 impl Source {
     pub fn empty() -> Self {
+        let df = Arc::new(DataFrame::empty());
         Self {
             name: "#".into(),
-            kind: Kind::Eager(Arc::new(DataFrame::empty())),
+            kind: Kind::Eager {
+                parquet: OnceCell::new(),
+                df,
+            },
         }
     }
 
     pub fn from_mem(name: String, df: DataFrameRef) -> Self {
         Self {
             name,
-            kind: Kind::Eager(df),
+            kind: Kind::Eager {
+                parquet: OnceCell::new(),
+                df,
+            },
         }
     }
 
@@ -171,9 +182,13 @@ impl Source {
 
     fn con(&self) -> Result<Connection> {
         Ok(match &self.kind {
-            Kind::Eager(df) => {
+            Kind::Eager { df, parquet } => {
+                let file = parquet.get_or_try_init(|| df.to_parquet())?;
                 let con = Connection::mem()?;
-                con.bind_arrow("current", df)?;
+                con.execute(&format!(
+                    "CREATE VIEW current AS SELECT * FROM read_parquet({:?})",
+                    file.path()
+                ))?;
                 con
             }
             Kind::Sql { current, .. } => match current {
@@ -193,7 +208,7 @@ impl Source {
     pub fn sql(&self) -> &str {
         match &self.kind {
             Kind::Sql { sql, .. } => sql,
-            Kind::Eager(_) | Kind::File { .. } => "SELECT * FROM current",
+            Kind::Eager { .. } | Kind::File { .. } => "SELECT * FROM current",
         }
     }
 
@@ -203,14 +218,14 @@ impl Source {
 
     pub fn path(&self) -> Option<&Path> {
         match &self.kind {
-            Kind::Eager(_) | Kind::Sql { .. } => None,
+            Kind::Eager { .. } | Kind::Sql { .. } => None,
             Kind::File { path, .. } => Some(path),
         }
     }
 
     pub fn display_path(&self) -> Option<&str> {
         match &self.kind {
-            Kind::Eager(_) | Kind::Sql { .. } => None,
+            Kind::Eager { .. } | Kind::Sql { .. } => None,
             Kind::File { display_path, .. } => Some(display_path),
         }
     }
@@ -218,7 +233,7 @@ impl Source {
     /// Fast load of a in memory data frame
     fn sync_full(&self) -> Option<DataFrameRef> {
         match &self.kind {
-            Kind::Eager(p) => Some(p.clone()),
+            Kind::Eager { df, .. } => Some(df.clone()),
             Kind::File { .. } | Kind::Sql { .. } => None,
         }
     }
@@ -226,7 +241,7 @@ impl Source {
     pub fn describe(&self) -> Result<DataFrameRef> {
         let sql = match &self.kind {
             Kind::Sql { sql, .. } => format!("SUMMARIZE {sql}"),
-            Kind::Eager(_) | Kind::File { .. } => format!("SUMMARIZE SELECT * FROM current"),
+            Kind::Eager { .. } | Kind::File { .. } => format!("SUMMARIZE SELECT * FROM current"),
         };
         let df = self.con()?.frame(&sql)?;
         Ok(df)
@@ -235,7 +250,7 @@ impl Source {
     /// Load up to `limit` rows handling schema errors
     pub fn load(&self, limit: Option<usize>) -> Result<DataFrameRef> {
         let sql = match &self.kind {
-            Kind::Eager(df) => return Ok(df.clone()),
+            Kind::Eager { df, .. } => return Ok(df.clone()),
             Kind::Sql { sql, .. } => sql,
             Kind::File { .. } => "SELECT * FROM current",
         };
@@ -257,36 +272,38 @@ pub type DataFrameRef = Arc<DataFrame>;
 
 pub struct DataFrame {
     schema: SchemaRef,
-    cols: Vec<Vec<ArrayRef>>,
+    pub batchs: Vec<RecordBatch>,
     row_count: usize,
 }
 
 impl DataFrame {
     pub fn empty() -> Self {
         Self {
-            cols: vec![],
+            batchs: vec![],
             schema: Arc::new(Schema::empty()),
             row_count: 0,
         }
     }
 
     pub fn iter(&self, idx: usize, mut skip: usize) -> impl Iterator<Item = Ty<'_>> + '_ {
-        let col = &self.cols[idx];
-        let pos = col.iter().position(|a| {
-            if a.len() > skip {
+        let pos = self.batchs.iter().position(|a| {
+            if a.num_rows() > skip {
                 true
             } else {
-                skip -= a.len();
+                skip -= a.num_rows();
                 false
             }
         });
         let chunks = if let Some(pos) = pos {
-            &col[pos..]
+            &self.batchs[pos..]
         } else {
             &[]
         };
 
-        chunks.iter().flat_map(array_to_iter).skip(skip)
+        chunks
+            .iter()
+            .flat_map(move |c| array_to_iter(&c.columns()[idx]))
+            .skip(skip)
     }
 
     pub fn num_rows(&self) -> usize {
@@ -297,8 +314,18 @@ impl DataFrame {
         self.schema.fields().len()
     }
 
-    pub fn schema(&self) -> &Schema {
+    pub fn schema(&self) -> &SchemaRef {
         &self.schema
+    }
+
+    pub fn to_parquet(&self) -> Result<NamedTempFile> {
+        let mut tmp = NamedTempFile::new()?;
+        let mut w = parquet::arrow::ArrowWriter::try_new(&mut tmp, self.schema.clone(), None)?;
+        for batch in &self.batchs {
+            w.write(batch)?;
+        }
+        w.close()?;
+        Ok(tmp)
     }
 }
 
@@ -306,21 +333,19 @@ impl FromIterator<RecordBatch> for DataFrame {
     fn from_iter<T: IntoIterator<Item = RecordBatch>>(iter: T) -> Self {
         let mut iter = iter.into_iter();
         let mut empty = Self {
-            cols: vec![],
+            batchs: vec![],
             schema: Arc::new(Schema::empty()),
             row_count: 0,
         };
         if let Some(first) = iter.next() {
             empty.schema = first.schema();
             empty.row_count = first.num_rows();
-            empty.cols = first.columns().iter().map(|c| vec![c.clone()]).collect();
+            empty.batchs = vec![first];
 
             for batch in iter {
                 assert_eq!(empty.schema, batch.schema());
-                for (c, col) in batch.columns().iter().enumerate() {
-                    empty.cols[c].push(col.clone());
-                }
                 empty.row_count += batch.num_rows();
+                empty.batchs.push(batch);
             }
         }
 
