@@ -4,9 +4,8 @@ version = "0.1.0"
 edition = "2018"
 
 [dependencies]
-pyo3 = { version = "0.18.3", features = ["extension-module"] }
+pyo3 = { version = "0.19.0", features = ["extension-module"] }
 dtex = { path = ".." }
-pyo3-polars = "0.4.0"
 
 [lib]
 name = "dtex"

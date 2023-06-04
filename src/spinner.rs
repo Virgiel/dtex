@@ -22,8 +22,8 @@ impl Spinner {
             let elapsed = start.elapsed();
             // Wait for some frame to prevent flashing
             if elapsed > SPINNER_TICK {
-                let tick = ((elapsed - SPINNER_TICK).as_millis() / 250) as usize
-                    % SPINNERS_UNICODE.len();
+                let tick =
+                    ((elapsed - SPINNER_TICK).as_millis() / 250) as usize % SPINNERS_UNICODE.len();
                 return Some(SPINNERS_UNICODE[tick]);
             }
         }

@@ -83,7 +83,7 @@ impl Nav {
     }
 
     pub fn win_right(&mut self) {
-        self.o_col +=  self.v_col;
+        self.o_col += self.v_col;
         self.c_col = self.o_col;
     }
 

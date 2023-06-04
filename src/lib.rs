@@ -22,6 +22,8 @@ use tui::{
     Canvas, Terminal,
 };
 
+pub use arrow;
+
 mod describe;
 mod duckdb;
 pub mod error;
