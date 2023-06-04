@@ -5,7 +5,7 @@ use pyo3_polars::PyDataFrame;
 
 #[pyfunction]
 fn ex(pydf: Vec<PyDataFrame>) -> PyResult<()> {
-    ::dtex::run(pydf.into_iter().map(|pdt| Source::from_polars(pdt.0)));
+    ::dtex::run(pydf.into_iter().map(|pdt| Source::from_mem(pdt.0)));
     Ok(())
 }
 

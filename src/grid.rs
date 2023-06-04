@@ -6,7 +6,7 @@ use tui::{crossterm::event::KeyEvent, Canvas};
 use crate::{
     describe::Describer,
     event::Orchestrator,
-    source::{Loader, Source},
+    source::{DataFrame, Loader, Source},
     style,
     tab::{GridUI, Status},
     OnKey, Ty,
@@ -99,7 +99,7 @@ impl SourceGrid {
         {
             self.d_grid.draw(c, df).normal(Status::Description)
         } else {
-            self.grid.draw(c, &self.loader.df)
+            self.grid.draw(c, self.loader.df.as_ref())
         }
     }
 
@@ -130,29 +130,29 @@ impl SourceGrid {
 pub trait Frame {
     fn nb_col(&self) -> usize;
     fn nb_row(&self) -> usize;
-    fn idx_iter(&self) -> Box<dyn Iterator<Item = Ty> + '_>;
-    fn col_name(&self, idx: usize) -> &str;
-    fn col_iter(&self, idx: usize) -> Box<dyn Iterator<Item = Ty> + '_>;
+    fn idx_iter(&self, skip: usize) -> Box<dyn Iterator<Item = Ty> + '_>;
+    fn col_name(&self, idx: usize) -> String;
+    fn col_iter(&self, idx: usize, skip: usize) -> Box<dyn Iterator<Item = Ty> + '_>;
 }
 
-impl Frame for polars::prelude::DataFrame {
+impl Frame for DataFrame {
     fn nb_col(&self) -> usize {
-        self.get_columns().len()
+        self.num_columns()
     }
 
     fn nb_row(&self) -> usize {
-        self.height()
+        self.num_rows()
     }
 
-    fn idx_iter(&self) -> Box<dyn Iterator<Item = Ty>> {
-        Box::new((0..self.height()).map(|n| Ty::U64(n as u64 + 1)))
+    fn idx_iter(&self, skip: usize) -> Box<dyn Iterator<Item = Ty>> {
+        Box::new((skip..self.num_rows()).map(|n| Ty::U64(n as u64 + 1)))
     }
 
-    fn col_name(&self, idx: usize) -> &str {
-        self.get_columns()[idx].name()
+    fn col_name(&self, idx: usize) -> String {
+        self.schema().all_fields()[idx].name().clone()
     }
 
-    fn col_iter(&self, idx: usize) -> Box<dyn Iterator<Item = Ty> + '_> {
-        Box::new(self.get_columns()[idx].phys_iter().map(Into::into))
+    fn col_iter(&self, idx: usize, skip: usize) -> Box<dyn Iterator<Item = Ty> + '_> {
+        Box::new(self.iter(idx, skip))
     }
 }

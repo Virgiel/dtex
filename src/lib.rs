@@ -1,13 +1,18 @@
 use std::{borrow::Cow, io, sync::mpsc::RecvTimeoutError, time::Duration};
 
-use bstr::{BStr, BString};
-use duckdb::Connection;
+use arrow::{
+    array::{ArrayRef, AsArray},
+    datatypes::{
+        DataType, Float16Type, Float32Type, Float64Type, Int16Type, Int32Type, Int64Type, Int8Type,
+        UInt16Type, UInt32Type, UInt64Type, UInt8Type,
+    },
+};
+use bstr::BStr;
 use event::event_listener;
 use fmt::rtrim;
 use grid::nav::Nav;
 use notify::{RecommendedWatcher, Watcher};
 use notify_debouncer_full::FileIdMap;
-use polars::prelude::AnyValue;
 use reedline::KeyModifiers;
 use source::Source;
 use tab::Tab;
@@ -29,20 +34,6 @@ mod spinner;
 mod style;
 mod tab;
 mod utils;
-
-pub fn test() -> polars::prelude::DataFrame {
-    let conn = Connection::mem().unwrap();
-    let frame = conn.frame("SELECT * FROM 'data/postcode.csv'").unwrap();
-    dbg!(&frame);
-    conn.bind_arrow("current", &frame).unwrap();
-    dbg!("test");
-    let after = conn.frame("SELECT * FROM current").unwrap();
-
-    dbg!(&after);
-
-    assert_eq!(frame, after);
-    after
-}
 
 pub fn run(sources: impl Iterator<Item = Source>) {
     let (receiver, watcher, orchestrator) = event_listener();
@@ -241,26 +232,41 @@ impl<'a> From<&'a str> for Ty<'a> {
     }
 }
 
-impl<'a> From<AnyValue<'a>> for Ty<'a> {
-    fn from(value: AnyValue<'a>) -> Self {
-        match value {
-            AnyValue::Null => Ty::Null,
-            AnyValue::Boolean(bool) => Ty::Bool(bool),
-            AnyValue::UInt8(nb) => Ty::U64(nb as u64),
-            AnyValue::UInt16(nb) => Ty::U64(nb as u64),
-            AnyValue::UInt32(nb) => Ty::U64(nb as u64),
-            AnyValue::UInt64(nb) => Ty::U64(nb),
-            AnyValue::Int8(nb) => Ty::I64(nb as i64),
-            AnyValue::Int16(nb) => Ty::I64(nb as i64),
-            AnyValue::Int32(nb) => Ty::I64(nb as i64),
-            AnyValue::Int64(nb) => Ty::I64(nb),
-            AnyValue::Float32(nb) => Ty::F64(nb as f64),
-            AnyValue::Float64(nb) => Ty::F64(nb),
-            AnyValue::Utf8(str) => Ty::Str(Cow::Borrowed(str.into())),
-            AnyValue::Utf8Owned(str) => Ty::Str(Cow::Owned(BString::new(str.as_bytes().to_vec()))),
-            AnyValue::Binary(bs) => Ty::Str(Cow::Borrowed(BStr::new(bs))),
-            AnyValue::BinaryOwned(bs) => Ty::Str(Cow::Owned(BString::new(bs))),
-            AnyValue::List(_) => todo!(),
+macro_rules! iter {
+    ($m:expr, $map:expr) => {
+        Box::new($m.iter().map(|b| b.map($map).unwrap_or(Ty::Null)))
+    };
+}
+
+pub fn array_to_iter(array: &ArrayRef) -> Box<dyn Iterator<Item = Ty<'_>> + '_> {
+    match array.data_type() {
+        DataType::Null => Box::new((0..array.len()).map(|_| Ty::Null)),
+        DataType::Boolean => iter!(array.as_boolean(), |v| Ty::Bool(v)),
+        DataType::Int8 => iter!(array.as_primitive::<Int8Type>(), |v| Ty::I64(v as i64)),
+        DataType::Int16 => iter!(array.as_primitive::<Int16Type>(), |v| Ty::I64(v as i64)),
+        DataType::Int32 => iter!(array.as_primitive::<Int32Type>(), |v| Ty::I64(v as i64)),
+        DataType::Int64 => iter!(array.as_primitive::<Int64Type>(), |v| Ty::I64(v as i64)),
+        DataType::UInt8 => iter!(array.as_primitive::<UInt8Type>(), |v| Ty::U64(v as u64)),
+        DataType::UInt16 => iter!(array.as_primitive::<UInt16Type>(), |v| Ty::U64(v as u64)),
+        DataType::UInt32 => iter!(array.as_primitive::<UInt32Type>(), |v| Ty::U64(v as u64)),
+        DataType::UInt64 => iter!(array.as_primitive::<UInt64Type>(), |v| Ty::U64(v as u64)),
+        DataType::Float16 => {
+            iter!(array.as_primitive::<Float16Type>(), |v| Ty::F64(v.to_f64()))
         }
+        DataType::Float32 => {
+            iter!(array.as_primitive::<Float32Type>(), |v| Ty::F64(v as f64))
+        }
+        DataType::Float64 => {
+            iter!(array.as_primitive::<Float64Type>(), |v| Ty::F64(v as f64))
+        }
+        DataType::Utf8 => {
+            iter!(array.as_string::<i32>(), |v| Ty::Str(Cow::Borrowed(
+                v.into()
+            )))
+        }
+        DataType::LargeUtf8 => iter!(array.as_string::<i64>(), |v| Ty::Str(Cow::Borrowed(
+            v.into()
+        ))),
+        _ => todo!(),
     }
 }
