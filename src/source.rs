@@ -135,9 +135,9 @@ impl Source {
         }
     }
 
-    pub fn from_mem(df: DataFrameRef) -> Self {
+    pub fn from_mem(name: String, df: DataFrameRef) -> Self {
         Self {
-            name: "mem".into(),
+            name,
             kind: Kind::Eager(df),
         }
     }
@@ -273,7 +273,7 @@ impl DataFrame {
     pub fn iter(&self, idx: usize, mut skip: usize) -> impl Iterator<Item = Ty<'_>> + '_ {
         let col = &self.cols[idx];
         let pos = col.iter().position(|a| {
-            if a.len()> skip {
+            if a.len() > skip {
                 true
             } else {
                 skip -= a.len();
@@ -286,11 +286,7 @@ impl DataFrame {
             &[]
         };
 
-        chunks
-            .into_iter()
-            .map(|a| array_to_iter(a))
-            .flatten()
-            .skip(skip)
+        chunks.iter().flat_map(array_to_iter).skip(skip)
     }
 
     pub fn num_rows(&self) -> usize {
@@ -317,11 +313,7 @@ impl FromIterator<RecordBatch> for DataFrame {
         if let Some(first) = iter.next() {
             empty.schema = first.schema();
             empty.row_count = first.num_rows();
-            empty.cols = first
-                .columns()
-                .into_iter()
-                .map(|c| vec![c.clone()])
-                .collect();
+            empty.cols = first.columns().iter().map(|c| vec![c.clone()]).collect();
 
             for batch in iter {
                 assert_eq!(empty.schema, batch.schema());
