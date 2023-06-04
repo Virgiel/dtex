@@ -3,5 +3,6 @@
 ## TODO
 
 - Goto
-- Progressive loading task & task cancelation - consider moving to datafusion instead of polars-rs
+- Progressive loading
+- Better task cancelation
 - Smart formatting of path ~ for home and ‥ instead of .. 

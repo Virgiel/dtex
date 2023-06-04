@@ -3,24 +3,30 @@ use std::{
     sync::Arc,
 };
 
-use polars::prelude::DataFrame;
+use arrow::{
+    array::{Array, ArrayRef},
+    datatypes::{Schema, SchemaRef},
+    record_batch::RecordBatch,
+};
 
 use crate::{
+    array_to_iter,
     duckdb::Connection,
     error::Result,
     event::{Orchestrator, Task},
+    Ty,
 };
 
 const PRELOAD_LEN: usize = 1024;
 
 pub struct LoadingTask {
-    receiver: Task<DataFrame>, // Receiver for the backend task
+    receiver: Task<DataFrameRef>, // Receiver for the backend task
     goal: Option<usize>,
 }
 
 pub struct Loader {
     task: Option<LoadingTask>,
-    pub df: DataFrame,
+    pub df: DataFrameRef,
     full: bool,
 }
 
@@ -28,7 +34,7 @@ impl Loader {
     pub fn new(source: Arc<Source>, orchestrator: &Orchestrator) -> Self {
         let mut tmp = Self {
             task: None,
-            df: DataFrame::default(),
+            df: Arc::new(DataFrame::empty()),
             full: false,
         };
         tmp.bg_load(source, Some(PRELOAD_LEN), orchestrator);
@@ -41,7 +47,7 @@ impl Loader {
             .task
             .as_ref()
             .map(|t| t.goal.unwrap_or(usize::MAX))
-            .unwrap_or(self.df.height() + self.full as usize)
+            .unwrap_or(self.df.num_rows() + self.full as usize)
             .max(PRELOAD_LEN);
         self.bg_load(source, Some(goal), orchestrator);
     }
@@ -53,7 +59,7 @@ impl Loader {
         orchestrator: &Orchestrator,
     ) {
         // Skip loading if we already loaded, or are loading, a bigger data frame
-        if self.df.height().max(
+        if self.df.num_rows().max(
             self.task
                 .as_ref()
                 .map(|t| t.goal.unwrap_or(usize::MAX))
@@ -84,7 +90,7 @@ impl Loader {
             match task.receiver.tick() {
                 Ok(Some(df)) => {
                     self.df = df;
-                    self.full = self.df.height() < task.goal.unwrap_or(usize::MAX);
+                    self.full = self.df.num_rows() < task.goal.unwrap_or(usize::MAX);
                     self.task = None;
                     Ok(true)
                 }
@@ -105,7 +111,7 @@ impl Loader {
 }
 
 enum Kind {
-    Eager(DataFrame),
+    Eager(DataFrameRef),
     Sql {
         current: Option<Arc<Source>>,
         sql: String,
@@ -125,13 +131,13 @@ impl Source {
     pub fn empty() -> Self {
         Self {
             name: "#".into(),
-            kind: Kind::Eager(DataFrame::default()),
+            kind: Kind::Eager(Arc::new(DataFrame::empty())),
         }
     }
 
-    pub fn from_polars(df: DataFrame) -> Self {
+    pub fn from_mem(df: DataFrameRef) -> Self {
         Self {
-            name: "polars".into(),
+            name: "mem".into(),
             kind: Kind::Eager(df),
         }
     }
@@ -210,14 +216,14 @@ impl Source {
     }
 
     /// Fast load of a in memory data frame
-    fn sync_full(&self) -> Option<DataFrame> {
+    fn sync_full(&self) -> Option<DataFrameRef> {
         match &self.kind {
             Kind::Eager(p) => Some(p.clone()),
             Kind::File { .. } | Kind::Sql { .. } => None,
         }
     }
 
-    pub fn describe(&self) -> Result<DataFrame> {
+    pub fn describe(&self) -> Result<DataFrameRef> {
         let sql = match &self.kind {
             Kind::Sql { sql, .. } => format!("SUMMARIZE {sql}"),
             Kind::Eager(_) | Kind::File { .. } => format!("SUMMARIZE SELECT * FROM current"),
@@ -227,7 +233,7 @@ impl Source {
     }
 
     /// Load up to `limit` rows handling schema errors
-    pub fn load(&self, limit: Option<usize>) -> Result<DataFrame> {
+    pub fn load(&self, limit: Option<usize>) -> Result<DataFrameRef> {
         let sql = match &self.kind {
             Kind::Eager(df) => return Ok(df.clone()),
             Kind::Sql { sql, .. } => sql,
@@ -239,14 +245,93 @@ impl Source {
             .map(|d| d.unwrap())
             .take_while(|d| {
                 let taken = limit > 0;
-                limit = limit.saturating_sub(d.height());
+                limit = limit.saturating_sub(d.num_rows());
                 taken
             })
-            .reduce(|mut a, b| {
-                a.extend(&b).unwrap();
-                a
-            })
-            .unwrap_or_default();
-        Ok(df)
+            .collect();
+        Ok(Arc::new(df))
+    }
+}
+
+pub type DataFrameRef = Arc<DataFrame>;
+
+pub struct DataFrame {
+    schema: SchemaRef,
+    cols: Vec<Vec<ArrayRef>>,
+    row_count: usize,
+}
+
+impl DataFrame {
+    pub fn empty() -> Self {
+        Self {
+            cols: vec![],
+            schema: Arc::new(Schema::empty()),
+            row_count: 0,
+        }
+    }
+
+    pub fn iter(&self, idx: usize, mut skip: usize) -> impl Iterator<Item = Ty<'_>> + '_ {
+        let col = &self.cols[idx];
+        let pos = col.iter().position(|a| {
+            if a.len()> skip {
+                true
+            } else {
+                skip -= a.len();
+                false
+            }
+        });
+        let chunks = if let Some(pos) = pos {
+            &col[pos..]
+        } else {
+            &[]
+        };
+
+        chunks
+            .into_iter()
+            .map(|a| array_to_iter(a))
+            .flatten()
+            .skip(skip)
+    }
+
+    pub fn num_rows(&self) -> usize {
+        self.row_count
+    }
+
+    pub fn num_columns(&self) -> usize {
+        self.schema.fields().len()
+    }
+
+    pub fn schema(&self) -> &Schema {
+        &self.schema
+    }
+}
+
+impl FromIterator<RecordBatch> for DataFrame {
+    fn from_iter<T: IntoIterator<Item = RecordBatch>>(iter: T) -> Self {
+        let mut iter = iter.into_iter();
+        let mut empty = Self {
+            cols: vec![],
+            schema: Arc::new(Schema::empty()),
+            row_count: 0,
+        };
+        if let Some(first) = iter.next() {
+            empty.schema = first.schema();
+            empty.row_count = first.num_rows();
+            empty.cols = first
+                .columns()
+                .into_iter()
+                .map(|c| vec![c.clone()])
+                .collect();
+
+            for batch in iter {
+                assert_eq!(empty.schema, batch.schema());
+                for (c, col) in batch.columns().iter().enumerate() {
+                    empty.cols[c].push(col.clone());
+                }
+                empty.row_count += batch.num_rows();
+            }
+        }
+
+        empty
     }
 }

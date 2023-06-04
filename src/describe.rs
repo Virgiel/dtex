@@ -4,7 +4,7 @@ use crate::{
     error::Result,
     event::{Orchestrator, Task},
     grid::Frame,
-    source::Source,
+    source::{DataFrameRef, Source},
 };
 
 pub struct Describer {
@@ -54,27 +54,27 @@ impl Describer {
     }
 }
 
-pub struct Description(polars::prelude::DataFrame);
+pub struct Description(DataFrameRef);
 
 impl Frame for Description {
     fn nb_col(&self) -> usize {
-        self.0.nb_col() - 1
+        self.0.num_columns() - 1
     }
 
     fn nb_row(&self) -> usize {
-        self.0.nb_row()
+        self.0.num_rows()
     }
 
-    fn idx_iter(&self) -> Box<dyn Iterator<Item = crate::Ty> + '_> {
-        Box::new(self.0.get_columns()[0].phys_iter().map(Into::into))
+    fn idx_iter(&self, skip: usize) -> Box<dyn Iterator<Item = crate::Ty> + '_> {
+        Box::new(self.0.iter(0, skip))
     }
 
-    fn col_name(&self, idx: usize) -> &str {
-        self.0.get_columns()[idx + 1].name()
+    fn col_name(&self, idx: usize) -> String {
+        self.0.schema().all_fields()[idx + 1].name().clone()
     }
 
-    fn col_iter(&self, idx: usize) -> Box<dyn Iterator<Item = crate::Ty> + '_> {
-        Box::new(self.0.get_columns()[idx + 1].phys_iter().map(Into::into))
+    fn col_iter(&self, idx: usize, skip: usize) -> Box<dyn Iterator<Item = crate::Ty> + '_> {
+        Box::new(self.0.iter(idx + 1, skip))
     }
 }
 

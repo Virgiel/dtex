@@ -117,17 +117,15 @@ impl FrameGrid {
     pub fn draw(&mut self, c: &mut Canvas, df: &dyn Frame) -> GridUI {
         pub fn size_col<'a>(
             values: impl Iterator<Item = Ty<'a>>,
-            off: usize,
             n: usize,
         ) -> (Vec<Ty<'a>>, ColStat) {
-            values.skip(off).take(n).fold(
-                (Vec::new(), ColStat::new()),
-                |(mut vec, mut stat), ty| {
+            values
+                .take(n)
+                .fold((Vec::new(), ColStat::new()), |(mut vec, mut stat), ty| {
                     stat.add(&ty);
                     vec.push(ty);
                     (vec, stat)
-                },
-            )
+                })
         }
 
         let nb_col = df.nb_col();
@@ -138,7 +136,7 @@ impl FrameGrid {
         let v_row = c.height() - 1; // header bar
         let row_off = self.nav.row_offset(nb_row, v_row);
         // Nb call necessary to print the biggest index
-        let (ids, mut id_stat) = size_col(df.idx_iter(), row_off, v_row);
+        let (ids, mut id_stat) = size_col(df.idx_iter(row_off), v_row);
         id_stat.align_right();
         // Whole canvas minus index col
         let mut remaining_width = c.width() - id_stat.budget() - 1;
@@ -149,7 +147,7 @@ impl FrameGrid {
             if let Some(off) = coll_off_iter.next() {
                 let idx = self.projection.project(off);
                 let name = df.col_name(idx);
-                let (fields, stat) = size_col(df.col_iter(idx), row_off, v_row);
+                let (fields, stat) = size_col(df.col_iter(idx, row_off), v_row);
                 let size = self.sizer.size(idx, stat.budget(), name.width());
                 let allowed = size.min(remaining_width);
                 remaining_width = remaining_width.saturating_sub(allowed + 1); // +1 for the separator
