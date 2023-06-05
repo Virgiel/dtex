@@ -116,7 +116,7 @@ impl App {
             let mut fmt_buf = String::new();
             let mut line = c.top();
             for (off, name) in &cols {
-                let style = if *off == self.nav.c_col {
+                let style = if *off == self.nav.c_col() {
                     style::tab_selected()
                 } else {
                     style::tab()
@@ -131,7 +131,7 @@ impl App {
                 );
                 line.draw(" ", style::separator());
             }
-            self.tabs[self.nav.c_col].draw(c)
+            self.tabs[self.nav.c_col()].draw(c)
         }
     }
 
@@ -161,12 +161,12 @@ impl App {
                     }
 
                     if pass {
-                        if let Some(tab) = self.tabs.get_mut(self.nav.c_col) {
+                        if let Some(tab) = self.tabs.get_mut(self.nav.c_col()) {
                             if tab.on_key(&event) {
                                 if let Some(path) = tab.source.path() {
                                     self.debouncer.watcher().unwatch(path).unwrap();
                                 }
-                                self.tabs.remove(self.nav.c_col);
+                                self.tabs.remove(self.nav.c_col());
                             }
                         }
                     }
@@ -200,7 +200,7 @@ impl App {
     }
 
     fn is_loading(&self) -> bool {
-        self.tabs[self.nav.c_col].is_loading()
+        self.tabs[self.nav.c_col()].is_loading()
     }
 }
 

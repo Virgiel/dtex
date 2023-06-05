@@ -2,6 +2,7 @@ use std::{
     ffi::{CStr, CString},
     fmt::Display,
     mem::MaybeUninit,
+    sync::Arc,
 };
 
 use arrow::{
@@ -44,10 +45,12 @@ impl Display for Error {
 
 pub type Result<T> = std::result::Result<T, Error>;
 
-struct DB(duckdb_database);
+struct DB {
+    db: duckdb_database,
+}
 
 impl DB {
-    pub fn mem() -> Result<Self> {
+    pub fn tmp() -> Result<Self> {
         let mut db: duckdb_database = std::ptr::null_mut();
         unsafe {
             let mut err = std::ptr::null_mut();
@@ -64,13 +67,13 @@ impl DB {
                 return Err(Error::Open(msg));
             }
         }
-        Ok(Self(db))
+        Ok(Self { db })
     }
 }
 
 impl Drop for DB {
     fn drop(&mut self) {
-        unsafe { duckdb_close(&mut self.0) }
+        unsafe { duckdb_close(&mut self.db) }
     }
 }
 
@@ -115,22 +118,25 @@ impl Drop for Chunks {
 }
 
 pub struct Connection {
-    _db: DB,
+    db: Arc<DB>,
     con: duckdb_connection,
 }
 
 impl Connection {
     /// Open a in memory database
     pub fn mem() -> Result<Self> {
-        let db = DB::mem()?;
+        let db = DB::tmp()?;
         let mut con: duckdb_connection = std::ptr::null_mut();
         unsafe {
-            if duckdb_connect(db.0, &mut con) != DuckDBSuccess {
+            if duckdb_connect(db.db, &mut con) != DuckDBSuccess {
                 duckdb_disconnect(&mut con);
                 return Err(Error::Connect);
             }
         }
-        Ok(Self { _db: db, con })
+        Ok(Self {
+            db: Arc::new(db),
+            con,
+        })
     }
 
     pub fn execute(&self, query: &str) -> Result<()> {
