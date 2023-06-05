@@ -2,7 +2,6 @@ use std::{
     ffi::{CStr, CString},
     fmt::Display,
     mem::MaybeUninit,
-    sync::Arc,
 };
 
 use arrow::{
@@ -19,8 +18,6 @@ use libduckdb_sys::{
     duckdb_query, duckdb_result, duckdb_result_arrow_schema, duckdb_result_error,
     duckdb_result_get_chunk, duckdb_result_is_streaming, duckdb_stream_fetch_chunk, DuckDBSuccess,
 };
-
-use crate::source::DataFrameRef;
 
 #[derive(Debug)]
 pub enum Error {
@@ -81,6 +78,8 @@ pub struct Chunks {
     result: duckdb_result,
     idx: u64,
 }
+
+unsafe impl Send for Chunks {}
 
 impl Iterator for Chunks {
     type Item = Result<RecordBatch>;
@@ -150,7 +149,7 @@ impl Connection {
         Ok(())
     }
 
-    pub fn frame(&self, query: &str) -> Result<DataFrameRef> {
+    pub fn materialize(&self, query: &str) -> Result<Chunks> {
         let sql = CString::new(query).unwrap();
         let mut result: MaybeUninit<duckdb_result> = std::mem::MaybeUninit::uninit();
 
@@ -161,17 +160,14 @@ impl Connection {
                 return Err(Error::Execute(message));
             }
 
-            let chunk = Chunks {
+            Ok(Chunks {
                 result: result.assume_init(),
                 idx: 0,
-            };
-
-            let df = chunk.into_iter().map(|d| d.unwrap()).collect();
-            Ok(Arc::new(df))
+            })
         }
     }
 
-    pub fn chunks(&self, query: &str) -> Result<Chunks> {
+    pub fn stream(&self, query: &str) -> Result<Chunks> {
         let sql = CString::new(query).unwrap();
         let mut stmt: duckdb_prepared_statement = std::ptr::null_mut();
         let mut pending: duckdb_pending_result = std::ptr::null_mut();

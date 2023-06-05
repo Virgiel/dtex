@@ -6,7 +6,7 @@ use tui::{crossterm::event::KeyEvent, Canvas};
 use crate::{
     describe::Describer,
     event::Orchestrator,
-    source::{DataFrame, Loader, Source},
+    source::{DataFrame, FrameSource, Loader, Source},
     style,
     tab::{GridUI, Status},
     OnKey, Ty,
@@ -26,6 +26,7 @@ enum State {
 }
 pub struct SourceGrid {
     source: Arc<Source>,
+    frame: FrameSource,
     orchestrator: Orchestrator,
     loader: Loader,
     description: Describer,
@@ -38,7 +39,8 @@ pub struct SourceGrid {
 impl SourceGrid {
     pub fn new(source: Arc<Source>, orchestrator: Orchestrator) -> Self {
         Self {
-            loader: Loader::new(source.clone(), &orchestrator),
+            loader: Loader::streaming(source.clone(), &orchestrator),
+            frame: FrameSource::empty(),
             description: Describer::new(),
             orchestrator,
             source,
@@ -54,6 +56,8 @@ impl SourceGrid {
             Some("describe")
         } else if self.loader.is_loading() {
             Some("load")
+        } else if self.frame.is_loading() {
+            Some("stream")
         } else {
             None
         }
@@ -61,7 +65,7 @@ impl SourceGrid {
 
     pub fn set_source(&mut self, source: Arc<Source>) {
         self.source = source.clone();
-        self.loader.reload(source, &self.orchestrator);
+        self.loader = Loader::streaming(source, &self.orchestrator);
 
         // Clear current description
         self.description.cancel();
@@ -73,14 +77,18 @@ impl SourceGrid {
 
     pub fn draw(&mut self, c: &mut Canvas) -> GridUI {
         match self.loader.tick() {
-            Ok(new) => {
-                if new && self.description.is_running() {
+            Ok(Some(new)) => {
+                self.frame = new;
+                if self.description.is_running() {
                     self.description
                         .describe(self.source.clone(), &self.orchestrator)
                 }
             }
+            Ok(None) => {}
             Err(e) => self.error = format!("loader: {}", e.0),
         }
+        self.frame.goal(self.grid.nav.c_row + 1);
+        self.frame.tick();
         if let Err(e) = self.description.tick() {
             self.error = format!("describe: {}", e.0)
         }
@@ -99,7 +107,7 @@ impl SourceGrid {
         {
             self.d_grid.draw(c, df).normal(Status::Description)
         } else {
-            self.grid.draw(c, self.loader.df.as_ref())
+            self.grid.draw(c, self.frame.df())
         }
     }
 
@@ -108,8 +116,7 @@ impl SourceGrid {
         match self.state {
             State::Normal => match (self.grid.on_key(event), event.code) {
                 (OnKey::Pass, KeyCode::Char('a')) => {
-                    self.loader
-                        .load_more(self.source.clone(), None, &self.orchestrator);
+                    self.loader = Loader::full(self.source.clone(), &self.orchestrator);
                 }
                 (OnKey::Pass, KeyCode::Char('d')) => {
                     self.state = State::Description;

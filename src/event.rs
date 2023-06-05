@@ -12,6 +12,10 @@ use notify_debouncer_full::{new_debouncer, FileIdMap};
 pub struct Orchestrator(Thread);
 
 impl Orchestrator {
+    pub fn wake(&self) {
+        self.0.unpark();
+    }
+
     /// Start a new background task
     pub fn task<T: Send + 'static>(
         &self,

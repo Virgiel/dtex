@@ -23,7 +23,7 @@ enum State {
 
 pub struct FrameGrid {
     projection: Projection,
-    nav: Nav,
+    pub nav: Nav,
     sizer: Sizer,
     state: State,
 }
