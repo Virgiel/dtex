@@ -4,7 +4,7 @@ use crate::{
     error::Result,
     event::{Orchestrator, Task},
     grid::Frame,
-    source::{DataFrameRef, Source},
+    source::{DataFrame, Source},
 };
 
 pub struct Describer {
@@ -54,7 +54,7 @@ impl Describer {
     }
 }
 
-pub struct Description(DataFrameRef);
+pub struct Description(DataFrame);
 
 impl Frame for Description {
     fn nb_col(&self) -> usize {
@@ -79,6 +79,9 @@ impl Frame for Description {
 }
 
 pub fn describe(source: &Source) -> crate::error::Result<Description> {
-    let df = source.describe()?;
-    Ok(Description(df))
+    let df: Result<DataFrame> = source
+        .describe()?
+        .map(|d| d.map_err(|e| e.into()))
+        .collect();
+    Ok(Description(df?))
 }

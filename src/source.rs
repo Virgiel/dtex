@@ -1,6 +1,10 @@
 use std::{
     path::{Path, PathBuf},
-    sync::Arc,
+    sync::{
+        atomic::{AtomicUsize, Ordering},
+        Arc, Mutex,
+    },
+    thread::Thread,
 };
 
 use arrow::{
@@ -12,108 +16,240 @@ use tempfile::NamedTempFile;
 
 use crate::{
     array_to_iter,
-    duckdb::Connection,
+    duckdb::{Chunks, Connection},
     error::Result,
     event::{Orchestrator, Task},
     Ty,
 };
 
-const PRELOAD_LEN: usize = 1024;
-
-pub struct LoadingTask {
-    receiver: Task<DataFrameRef>, // Receiver for the backend task
-    goal: Option<usize>,
-}
-
-pub struct Loader {
-    task: Option<LoadingTask>,
-    pub df: DataFrameRef,
+struct Pending {
+    batches: Vec<RecordBatch>,
     full: bool,
+    error: Option<String>,
 }
 
-impl Loader {
-    pub fn new(source: Arc<Source>, orchestrator: &Orchestrator) -> Self {
-        let mut tmp = Self {
-            task: None,
-            df: Arc::new(DataFrame::empty()),
-            full: false,
-        };
-        tmp.bg_load(source, Some(PRELOAD_LEN), orchestrator);
-        tmp
+pub struct StreamingState {
+    goal: AtomicUsize,
+    pending: Mutex<Pending>,
+}
+
+pub enum FrameSource {
+    Full(DataFrame),
+    Error {
+        df: DataFrame,
+        error: String,
+    },
+    Streaming {
+        worker: Thread,
+        state: Arc<StreamingState>,
+        df: DataFrame,
+        is_loading: bool,
+    },
+}
+
+impl FrameSource {
+    pub fn empty() -> Self {
+        Self::full(DataFrame::empty())
     }
 
-    pub fn reload(&mut self, source: Arc<Source>, orchestrator: &Orchestrator) {
-        // Current task goal or current data frame length + 1 if full to handle size change
-        let goal = self
-            .task
-            .as_ref()
-            .map(|t| t.goal.unwrap_or(usize::MAX))
-            .unwrap_or(self.df.num_rows() + self.full as usize)
-            .max(PRELOAD_LEN);
-        self.bg_load(source, Some(goal), orchestrator);
+    pub fn full(full: DataFrame) -> Self {
+        Self::Full(full)
     }
 
-    pub fn load_more(
-        &mut self,
-        source: Arc<Source>,
-        goal: Option<usize>,
-        orchestrator: &Orchestrator,
-    ) {
-        // Skip loading if we already loaded, or are loading, a bigger data frame
-        if self.df.num_rows().max(
-            self.task
-                .as_ref()
-                .map(|t| t.goal.unwrap_or(usize::MAX))
-                .unwrap_or(0),
-        ) >= goal.unwrap_or(usize::MAX)
-        {
-            return;
+    pub fn streaming(preload: DataFrame, chunks: Chunks, orchestrator: Orchestrator) -> Self {
+        let state = Arc::new(StreamingState {
+            goal: AtomicUsize::new(0),
+            pending: Mutex::new(Pending {
+                batches: vec![],
+                full: false,
+                error: None,
+            }),
+        });
+        let worker = {
+            let state = state.clone();
+            let loaded = preload.num_rows();
+            std::thread::Builder::new()
+                .name("streamer".into())
+                .spawn(move || worker(loaded, state, chunks, orchestrator))
+                .unwrap()
         }
-        self.bg_load(source, goal, orchestrator);
+        .thread()
+        .clone();
+        Self::Streaming {
+            worker,
+            state,
+            df: preload,
+            is_loading: true,
+        }
     }
 
-    // Start background loading task
-    fn bg_load(&mut self, source: Arc<Source>, goal: Option<usize>, orchestrator: &Orchestrator) {
-        if let Some(df) = source.sync_full() {
-            self.df = df;
-            self.full = true;
-            self.task = None;
-        } else {
-            self.task = {
-                let receiver = orchestrator.task(move || source.load(goal));
-                Some(LoadingTask { receiver, goal })
-            };
-        };
-    }
-
-    pub fn tick(&mut self) -> Result<bool> {
-        if let Some(task) = &mut self.task {
-            match task.receiver.tick() {
-                Ok(Some(df)) => {
-                    self.df = df;
-                    self.full = self.df.num_rows() < task.goal.unwrap_or(usize::MAX);
-                    self.task = None;
-                    Ok(true)
+    pub fn tick(&mut self) {
+        if let FrameSource::Streaming {
+            state,
+            df,
+            is_loading,
+            ..
+        } = self
+        {
+            let mut lock = state.pending.lock().unwrap();
+            df.extend(lock.batches.drain(..));
+            if lock.full {
+                drop(lock);
+                *self = FrameSource::Full(std::mem::take(df))
+            } else if let Some(error) = lock.error.take() {
+                drop(lock);
+                *self = FrameSource::Error {
+                    df: std::mem::take(df),
+                    error,
                 }
-                Ok(None) => Ok(false),
-                Err(it) => {
-                    self.task = None;
-                    Err(it)
-                }
+            } else {
+                drop(lock);
+                *is_loading = state.goal.load(Ordering::Relaxed) > df.num_rows();
             }
-        } else {
-            Ok(false)
+        }
+    }
+
+    pub fn goal(&self, goal: usize) {
+        // Goal is only used when streaming
+        if let FrameSource::Streaming {
+            state, df, worker, ..
+        } = self
+        {
+            // No need to update loading goal if already loaded
+            if goal > df.num_rows() {
+                state.goal.store(goal, Ordering::Relaxed);
+                worker.unpark(); // Wake loader
+            }
+        }
+    }
+
+    pub fn df(&self) -> &DataFrame {
+        match self {
+            FrameSource::Full(df)
+            | FrameSource::Error { df, .. }
+            | FrameSource::Streaming { df, .. } => df,
         }
     }
 
     pub fn is_loading(&self) -> bool {
-        self.task.is_some()
+        match self {
+            FrameSource::Full(_) | FrameSource::Error { .. } => false,
+            FrameSource::Streaming { is_loading, .. } => *is_loading,
+        }
+    }
+}
+
+impl Drop for FrameSource {
+    fn drop(&mut self) {
+        if let Self::Streaming { worker, state, .. } = self {
+            drop(state); // Reduce arc count
+            worker.unpark() // Wake worker for cancelation
+        }
+    }
+}
+
+fn worker(
+    mut loaded: usize,
+    state: Arc<StreamingState>,
+    mut chunks: Chunks,
+    orchestrator: Orchestrator,
+) {
+    let mut buff = Vec::new();
+    loop {
+        while loaded < state.goal.load(Ordering::Relaxed) {
+            if Arc::strong_count(&state) == 1 {
+                return;
+            }
+            match chunks.next() {
+                Some(Ok(batch)) => {
+                    loaded += batch.num_rows();
+                    buff.push(batch)
+                }
+                Some(Err(err)) => {
+                    state.pending.lock().unwrap().error = Some(err.to_string());
+                    orchestrator.wake();
+                    return;
+                }
+                None => {
+                    state.pending.lock().unwrap().full = true;
+                    orchestrator.wake();
+                    return;
+                }
+            }
+        }
+        if Arc::strong_count(&state) == 1 {
+            return;
+        }
+
+        if !buff.is_empty() {
+            state.pending.lock().unwrap().batches.append(&mut buff);
+            orchestrator.wake();
+        }
+        std::thread::park();
+    }
+}
+
+pub enum Loader {
+    Finished(Option<FrameSource>),
+    Pending(Task<FrameSource>),
+}
+
+impl Loader {
+    pub fn streaming(source: Arc<Source>, orchestrator: &Orchestrator) -> Self {
+        Self::load(source, orchestrator, false)
+    }
+
+    pub fn full(source: Arc<Source>, orchestrator: &Orchestrator) -> Self {
+        Self::load(source, orchestrator, true)
+    }
+
+    fn load(source: Arc<Source>, orchestrator: &Orchestrator, full: bool) -> Self {
+        if let Some(df) = source.sync_full() {
+            Self::Finished(Some(FrameSource::full(df)))
+        } else {
+            let orch = orchestrator.clone();
+            Self::Pending(orchestrator.task(move || {
+                let mut chunks = source.load(full)?; // TODO solve full
+                if full {
+                    let df: Result<DataFrame> = chunks.map(|r| r.map_err(|r| r.into())).collect();
+                    Ok(FrameSource::Full(df?))
+                } else {
+                    let preload = chunks
+                        .next()
+                        .map(|r| r.map(|r| r.into()))
+                        .unwrap_or_else(|| Ok(DataFrame::default()))?;
+                    let orch = orch.clone();
+                    Ok(FrameSource::streaming(preload, chunks, orch))
+                }
+            }))
+        }
+    }
+
+    pub fn tick(&mut self) -> Result<Option<FrameSource>> {
+        match self {
+            Loader::Finished(src) => Ok(src.take()),
+            Loader::Pending(task) => match task.tick() {
+                Ok(Some(src)) => {
+                    *self = Loader::Finished(None);
+                    Ok(Some(src))
+                }
+                Ok(None) => Ok(None),
+                Err(it) => {
+                    *self = Loader::Finished(None);
+                    Err(it)
+                }
+            },
+        }
+    }
+
+    pub fn is_loading(&self) -> bool {
+        matches!(self, Loader::Pending(_))
     }
 }
 
 enum Kind {
     Eager {
-        df: DataFrameRef,
+        df: DataFrame,
         parquet: OnceCell<NamedTempFile>, // TODO remove when using 'arrow_scan'
     },
     Sql {
@@ -133,17 +269,16 @@ pub struct Source {
 
 impl Source {
     pub fn empty() -> Self {
-        let df = Arc::new(DataFrame::empty());
         Self {
             name: "#".into(),
             kind: Kind::Eager {
                 parquet: OnceCell::new(),
-                df,
+                df: DataFrame::empty(),
             },
         }
     }
 
-    pub fn from_mem(name: String, df: DataFrameRef) -> Self {
+    pub fn from_mem(name: String, df: DataFrame) -> Self {
         Self {
             name,
             kind: Kind::Eager {
@@ -231,62 +366,82 @@ impl Source {
     }
 
     /// Fast load of a in memory data frame
-    fn sync_full(&self) -> Option<DataFrameRef> {
+    fn sync_full(&self) -> Option<DataFrame> {
         match &self.kind {
             Kind::Eager { df, .. } => Some(df.clone()),
             Kind::File { .. } | Kind::Sql { .. } => None,
         }
     }
 
-    pub fn describe(&self) -> Result<DataFrameRef> {
+    pub fn describe(&self) -> Result<Chunks> {
         let sql = match &self.kind {
             Kind::Sql { sql, .. } => format!("SUMMARIZE {sql}"),
             Kind::Eager { .. } | Kind::File { .. } => format!("SUMMARIZE SELECT * FROM current"),
         };
-        let df = self.con()?.frame(&sql)?;
+        let df = self.con()?.materialize(&sql)?;
         Ok(df)
     }
 
-    /// Load up to `limit` rows handling schema errors
-    pub fn load(&self, limit: Option<usize>) -> Result<DataFrameRef> {
+    pub fn load(&self, full: bool) -> Result<Chunks> {
         let sql = match &self.kind {
-            Kind::Eager { df, .. } => return Ok(df.clone()),
             Kind::Sql { sql, .. } => sql,
-            Kind::File { .. } => "SELECT * FROM current",
+            Kind::Eager { .. } | Kind::File { .. } => "SELECT * FROM current",
         };
-        let mut limit = limit.unwrap_or(usize::MAX);
-        let chunks = self.con()?.chunks(sql)?;
-        let df = chunks
-            .map(|d| d.unwrap())
-            .take_while(|d| {
-                let taken = limit > 0;
-                limit = limit.saturating_sub(d.num_rows());
-                taken
-            })
-            .collect();
-        Ok(Arc::new(df))
+        if full {
+            Ok(self.con()?.materialize(sql)?)
+        } else {
+            Ok(self.con()?.stream(sql)?)
+        }
     }
 }
 
-pub type DataFrameRef = Arc<DataFrame>;
-
-pub struct DataFrame {
+#[derive(Clone)]
+struct DataFrameImpl {
     schema: SchemaRef,
     pub batchs: Vec<RecordBatch>,
     row_count: usize,
 }
 
-impl DataFrame {
-    pub fn empty() -> Self {
+impl DataFrameImpl {
+    fn push(&mut self, batch: RecordBatch) {
+        if self.schema.fields.is_empty() {
+            self.schema = batch.schema();
+            self.row_count = batch.num_rows();
+            self.batchs = vec![batch];
+        } else {
+            assert_eq!(self.schema, batch.schema());
+            self.row_count += batch.num_rows();
+            self.batchs.push(batch);
+        }
+    }
+
+    pub fn extend(&mut self, iter: impl Iterator<Item = RecordBatch>) {
+        for batch in iter {
+            self.push(batch);
+        }
+    }
+}
+
+impl Default for DataFrameImpl {
+    fn default() -> Self {
         Self {
             batchs: vec![],
             schema: Arc::new(Schema::empty()),
             row_count: 0,
         }
     }
+}
+
+#[derive(Clone, Default)]
+pub struct DataFrame(Arc<DataFrameImpl>);
+
+impl DataFrame {
+    pub fn empty() -> Self {
+        Self::default()
+    }
 
     pub fn iter(&self, idx: usize, mut skip: usize) -> impl Iterator<Item = Ty<'_>> + '_ {
-        let pos = self.batchs.iter().position(|a| {
+        let pos = self.0.batchs.iter().position(|a| {
             if a.num_rows() > skip {
                 true
             } else {
@@ -295,7 +450,7 @@ impl DataFrame {
             }
         });
         let chunks = if let Some(pos) = pos {
-            &self.batchs[pos..]
+            &self.0.batchs[pos..]
         } else {
             &[]
         };
@@ -307,48 +462,52 @@ impl DataFrame {
     }
 
     pub fn num_rows(&self) -> usize {
-        self.row_count
+        self.0.row_count
     }
 
     pub fn num_columns(&self) -> usize {
-        self.schema.fields().len()
+        self.0.schema.fields().len()
     }
 
     pub fn schema(&self) -> &SchemaRef {
-        &self.schema
+        &self.0.schema
     }
 
     pub fn to_parquet(&self) -> Result<NamedTempFile> {
         let mut tmp = NamedTempFile::new()?;
-        let mut w = parquet::arrow::ArrowWriter::try_new(&mut tmp, self.schema.clone(), None)?;
-        for batch in &self.batchs {
+        let mut w = parquet::arrow::ArrowWriter::try_new(&mut tmp, self.0.schema.clone(), None)?;
+        for batch in &self.0.batchs {
             w.write(batch)?;
         }
         w.close()?;
         Ok(tmp)
     }
+
+    pub fn concat(&self, iter: impl Iterator<Item = RecordBatch>) -> Self {
+        let mut tmp = self.0.as_ref().clone();
+        tmp.extend(iter);
+        Self(Arc::new(tmp))
+    }
+
+    pub fn extend(&mut self, iter: impl Iterator<Item = RecordBatch>) {
+        match Arc::get_mut(&mut self.0) {
+            Some(inner) => inner.extend(iter),
+            None => *self = self.concat(iter),
+        }
+    }
+}
+
+impl From<RecordBatch> for DataFrame {
+    fn from(value: RecordBatch) -> Self {
+        std::iter::once(value).collect()
+    }
 }
 
 impl FromIterator<RecordBatch> for DataFrame {
     fn from_iter<T: IntoIterator<Item = RecordBatch>>(iter: T) -> Self {
-        let mut iter = iter.into_iter();
-        let mut empty = Self {
-            batchs: vec![],
-            schema: Arc::new(Schema::empty()),
-            row_count: 0,
-        };
-        if let Some(first) = iter.next() {
-            empty.schema = first.schema();
-            empty.row_count = first.num_rows();
-            empty.batchs = vec![first];
-
-            for batch in iter {
-                assert_eq!(empty.schema, batch.schema());
-                empty.row_count += batch.num_rows();
-                empty.batchs.push(batch);
-            }
-        }
-
-        empty
+        let iter = iter.into_iter();
+        let mut inner = DataFrameImpl::default();
+        inner.extend(iter);
+        Self(Arc::new(inner))
     }
 }
