@@ -56,6 +56,10 @@ impl FrameSource {
         Self::Full(full)
     }
 
+    pub fn load_all(&mut self) {
+        self.goal(usize::MAX);
+    }
+
     pub fn streaming(preload: DataFrame, chunks: Chunks, orchestrator: Orchestrator) -> Self {
         let state = Arc::new(StreamingState {
             goal: AtomicUsize::new(0),
@@ -117,8 +121,16 @@ impl FrameSource {
         {
             // No need to update loading goal if already loaded
             if goal > df.num_rows() {
-                state.goal.store(goal, Ordering::Relaxed);
-                worker.unpark(); // Wake loader
+                // Update goal only if we are not loading everything
+                if state
+                    .goal
+                    .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |prev| {
+                        (prev != usize::MAX).then_some(goal)
+                    })
+                    .is_ok()
+                {
+                    worker.unpark(); // Wake loader
+                }
             }
         }
     }
@@ -171,6 +183,7 @@ fn worker(
                     return;
                 }
                 None => {
+                    state.pending.lock().unwrap().batches.append(&mut buff);
                     state.pending.lock().unwrap().full = true;
                     orchestrator.wake();
                     return;
@@ -199,28 +212,19 @@ impl Loader {
         Self::load(source, orchestrator, false)
     }
 
-    pub fn full(source: Arc<Source>, orchestrator: &Orchestrator) -> Self {
-        Self::load(source, orchestrator, true)
-    }
-
-    fn load(source: Arc<Source>, orchestrator: &Orchestrator, full: bool) -> Self {
+    fn load(source: Arc<Source>, orchestrator: &Orchestrator, materialize: bool) -> Self {
         if let Some(df) = source.sync_full() {
             Self::Finished(Some(FrameSource::full(df)))
         } else {
             let orch = orchestrator.clone();
             Self::Pending(orchestrator.task(move || {
-                let mut chunks = source.load(full)?; // TODO solve full
-                if full {
-                    let df: Result<DataFrame> = chunks.map(|r| r.map_err(|r| r.into())).collect();
-                    Ok(FrameSource::Full(df?))
-                } else {
-                    let preload = chunks
-                        .next()
-                        .map(|r| r.map(|r| r.into()))
-                        .unwrap_or_else(|| Ok(DataFrame::default()))?;
-                    let orch = orch.clone();
-                    Ok(FrameSource::streaming(preload, chunks, orch))
-                }
+                let mut chunks = source.load(materialize)?;
+                let preload = chunks
+                    .next()
+                    .map(|r| r.map(|r| r.into()))
+                    .unwrap_or_else(|| Ok(DataFrame::default()))?;
+                let orch = orch.clone();
+                Ok(FrameSource::streaming(preload, chunks, orch))
             }))
         }
     }
@@ -429,6 +433,14 @@ impl Default for DataFrameImpl {
             schema: Arc::new(Schema::empty()),
             row_count: 0,
         }
+    }
+}
+
+impl Drop for DataFrameImpl {
+    fn drop(&mut self) {
+        // We might have to free a lot of memory so we defer to another thread
+        let batchs = std::mem::take(&mut self.batchs);
+        std::thread::spawn(move || drop(batchs));
     }
 }
 

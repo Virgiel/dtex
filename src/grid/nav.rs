@@ -1,16 +1,17 @@
 pub struct Nav {
     // Offset positions
-    pub o_row: usize,
-    pub o_col: usize,
+    o_row: usize,
+    o_col: usize,
     // Cursor positions
-    pub c_row: usize,
-    pub c_col: usize,
+    c_row: usize,
+    c_col: usize,
+    t_row: usize,
     // Max positions
-    pub m_row: usize,
-    pub m_col: usize,
+    m_row: usize,
+    m_col: usize,
     // View dimensions
-    pub v_row: usize,
-    pub v_col: usize,
+    v_row: usize,
+    v_col: usize,
 }
 
 impl Nav {
@@ -20,6 +21,7 @@ impl Nav {
             o_col: 0,
             c_row: 0,
             c_col: 0,
+            t_row: 0,
             m_row: 0,
             m_col: 0,
             v_row: 0,
@@ -27,12 +29,22 @@ impl Nav {
         }
     }
 
+    pub fn c_row(&self) -> usize {
+        self.c_row
+    }
+
+    pub fn c_col(&self) -> usize {
+        self.c_col
+    }
+
     pub fn up(&mut self) {
         self.c_row = self.c_row.saturating_sub(1);
+        self.t_row = self.c_row;
     }
 
     pub fn down(&mut self) {
         self.c_row = self.c_row.saturating_add(1);
+        self.t_row = self.c_row;
     }
 
     pub fn left(&mut self) {
@@ -61,20 +73,24 @@ impl Nav {
 
     pub fn top(&mut self) {
         self.c_row = 0;
+        self.t_row = self.c_row;
     }
 
     pub fn btm(&mut self) {
         self.c_row = self.m_row;
+        self.t_row = self.c_row;
     }
 
     pub fn win_up(&mut self) {
         self.o_row = self.o_row.saturating_sub(self.v_row);
         self.c_row = self.o_row;
+        self.t_row = self.c_row;
     }
 
     pub fn win_down(&mut self) {
         self.o_row += self.v_row;
         self.c_row = self.o_row;
+        self.t_row = self.c_row;
     }
 
     pub fn win_left(&mut self) {
@@ -93,7 +109,7 @@ impl Nav {
         // Sync grid dimension
         self.m_row = nb_row.saturating_sub(1);
         // Ensure cursor pos fit in grid dimension
-        self.c_row = self.c_row.min(self.m_row);
+        self.c_row = self.t_row.min(self.m_row);
         // Ensure cursor is in view
         if self.c_row < self.o_row {
             self.o_row = self.c_row;
@@ -149,5 +165,6 @@ impl Nav {
     pub fn go_to(&mut self, (row, col): (usize, usize)) {
         self.c_row = row;
         self.c_col = col;
+        self.t_row = row;
     }
 }

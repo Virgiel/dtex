@@ -40,7 +40,7 @@ impl FrameGrid {
 
     pub fn on_key(&mut self, event: &KeyEvent) -> OnKey {
         let shift = event.modifiers.contains(KeyModifiers::SHIFT);
-        let idx = self.nav.c_col;
+        let idx = self.nav.c_col();
         match self.state {
             State::Normal => match event.code {
                 KeyCode::Char('s') => {
@@ -169,7 +169,7 @@ impl FrameGrid {
             );
 
             for (off, name, _, _, budget) in &cols {
-                let style = if *off == self.nav.c_col {
+                let style = if *off == self.nav.c_col() {
                     style::selected().bold()
                 } else {
                     style::primary().bold()
@@ -184,7 +184,7 @@ impl FrameGrid {
 
         // Draw rows
         for r in 0..v_row.min(nb_row - row_off) {
-            let current = r == self.nav.c_row - self.nav.o_row;
+            let current = r == self.nav.c_row() - row_off;
             let style = if current {
                 style::selected()
             } else {
@@ -213,8 +213,8 @@ impl FrameGrid {
         }
 
         GridUI {
-            col_name: (self.projection.nb_cols() > 0).then(|| df.col_name(self.nav.c_col)),
-            progress: ((self.nav.c_row + 1) * 100) / nb_row.max(1),
+            col_name: (self.projection.nb_cols() > 0).then(|| df.col_name(self.nav.c_col())),
+            progress: ((self.nav.c_row() + 1) * 100) / nb_row.max(1),
             status: match self.state {
                 State::Normal => Status::Normal,
                 State::Size => Status::Size,

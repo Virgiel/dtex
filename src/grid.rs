@@ -87,7 +87,7 @@ impl SourceGrid {
             Ok(None) => {}
             Err(e) => self.error = format!("loader: {}", e.0),
         }
-        self.frame.goal(self.grid.nav.c_row + 1);
+        self.frame.goal(self.grid.nav.c_row() + 1);
         self.frame.tick();
         if let Err(e) = self.description.tick() {
             self.error = format!("describe: {}", e.0)
@@ -115,9 +115,7 @@ impl SourceGrid {
         self.set_err(String::new());
         match self.state {
             State::Normal => match (self.grid.on_key(event), event.code) {
-                (OnKey::Pass, KeyCode::Char('a')) => {
-                    self.loader = Loader::full(self.source.clone(), &self.orchestrator);
-                }
+                (OnKey::Pass, KeyCode::Char('a')) => self.frame.load_all(),
                 (OnKey::Pass, KeyCode::Char('d')) => {
                     self.state = State::Description;
                     self.description
