@@ -252,6 +252,7 @@ impl Loader {
 }
 
 enum Kind {
+    Empty,
     Eager {
         df: DataFrame,
         parquet: OnceCell<NamedTempFile>, // TODO remove when using 'arrow_scan'
@@ -275,10 +276,7 @@ impl Source {
     pub fn empty() -> Self {
         Self {
             name: "#".into(),
-            kind: Kind::Eager {
-                parquet: OnceCell::new(),
-                df: DataFrame::empty(),
-            },
+            kind: Kind::Empty,
         }
     }
 
@@ -321,6 +319,7 @@ impl Source {
 
     fn con(&self) -> Result<Connection> {
         Ok(match &self.kind {
+            Kind::Empty => Connection::mem()?,
             Kind::Eager { df, parquet } => {
                 let file = parquet.get_or_try_init(|| df.to_parquet())?;
                 let con = Connection::mem()?;
@@ -346,6 +345,7 @@ impl Source {
 
     pub fn sql(&self) -> &str {
         match &self.kind {
+            Kind::Empty => "",
             Kind::Sql { sql, .. } => sql,
             Kind::Eager { .. } | Kind::File { .. } => "SELECT * FROM current",
         }
@@ -357,14 +357,14 @@ impl Source {
 
     pub fn path(&self) -> Option<&Path> {
         match &self.kind {
-            Kind::Eager { .. } | Kind::Sql { .. } => None,
+            Kind::Empty | Kind::Eager { .. } | Kind::Sql { .. } => None,
             Kind::File { path, .. } => Some(path),
         }
     }
 
     pub fn display_path(&self) -> Option<&str> {
         match &self.kind {
-            Kind::Eager { .. } | Kind::Sql { .. } => None,
+            Kind::Empty | Kind::Eager { .. } | Kind::Sql { .. } => None,
             Kind::File { display_path, .. } => Some(display_path),
         }
     }
@@ -372,6 +372,7 @@ impl Source {
     /// Fast load of a in memory data frame
     fn sync_full(&self) -> Option<DataFrame> {
         match &self.kind {
+            Kind::Empty => Some(DataFrame::empty()),
             Kind::Eager { df, .. } => Some(df.clone()),
             Kind::File { .. } | Kind::Sql { .. } => None,
         }
@@ -379,6 +380,7 @@ impl Source {
 
     pub fn describe(&self) -> Result<Chunks> {
         let sql = match &self.kind {
+            Kind::Empty => return Err("Nothing to describe".into()),
             Kind::Sql { sql, .. } => format!("SUMMARIZE {sql}"),
             Kind::Eager { .. } | Kind::File { .. } => format!("SUMMARIZE SELECT * FROM current"),
         };
@@ -388,6 +390,7 @@ impl Source {
 
     pub fn load(&self, full: bool) -> Result<Chunks> {
         let sql = match &self.kind {
+            Kind::Empty => return Err("Nothing to load".into()),
             Kind::Sql { sql, .. } => sql,
             Kind::Eager { .. } | Kind::File { .. } => "SELECT * FROM current",
         };
