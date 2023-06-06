@@ -9,7 +9,7 @@ mimalloc = { version = "0.1", default-features = false }
 # Terminal UI
 tui = { git = "https://github.com/Virgiel/tui" }
 # Line editor tool
-reedline = "0.19.1"
+reedline = "0.20.0"
 # Temporary file
 tempfile = "3.5.0"
 # Binary string helper
@@ -34,8 +34,8 @@ libduckdb-sys = { git = "https://github.com/Virgiel/duckdb-rs-tmp", features = [
     "parquet",
     "json",
 ] }
-arrow = { version = "40.0.0", features = ["ffi"], default-features = false }
-parquet = { version = "40.0.0", features = ["arrow"], default-features = false }
+arrow = { version = "41.0.0", features = ["ffi"], default-features = false }
+parquet = { version = "41.0.0", features = ["arrow"], default-features = false }
 
 [workspace]
 members = ["py-dtex"]

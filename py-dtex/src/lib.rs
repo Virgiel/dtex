@@ -1,7 +1,4 @@
-use std::{
-    ptr::addr_of_mut,
-    sync::{Arc, OnceLock},
-};
+use std::{ptr::addr_of_mut, sync::OnceLock};
 
 use ::dtex::{
     arrow::{
@@ -9,18 +6,18 @@ use ::dtex::{
         ffi::{ArrowArray, ArrowArrayRef, FFI_ArrowArray, FFI_ArrowSchema},
         record_batch::RecordBatch,
     },
-    source::DataFrameRef,
+    source::DataFrame,
 };
 use pyo3::{
     exceptions::PyValueError, ffi::Py_uintptr_t, prelude::*, types::PyList, wrap_pyfunction,
 };
 
 static CACHE: OnceLock<Extractor> = OnceLock::new();
-struct Extractor(Vec<(Py<PyAny>, fn(&PyAny) -> PyResult<DataFrameRef>)>);
+struct Extractor(Vec<(Py<PyAny>, fn(&PyAny) -> PyResult<DataFrame>)>);
 
 impl Extractor {
     pub fn load(py: Python) -> Self {
-        let mut extractors: Vec<(Py<PyAny>, fn(&PyAny) -> PyResult<DataFrameRef>)> = vec![];
+        let mut extractors: Vec<(Py<PyAny>, fn(&PyAny) -> PyResult<DataFrame>)> = vec![];
         if let Ok(polars) = PyModule::import(py, "polars") {
             if let Ok(eager) = polars.getattr("DataFrame") {
                 extractors.push((eager.into(), Self::extract_polars_eager))
@@ -63,10 +60,10 @@ impl Extractor {
 
         let data = ArrowArray::new(array, schema).to_data().unwrap();
         let array = make_array(data);
-        Ok(Arc::new(array))
+        Ok(array)
     }
 
-    fn extract_polars_eager(it: &PyAny) -> PyResult<DataFrameRef> {
+    fn extract_polars_eager(it: &PyAny) -> PyResult<DataFrame> {
         let series = it.call_method0("get_columns")?;
         let n = it.getattr("width")?.extract::<usize>()?;
         let mut columns = Vec::with_capacity(n);
@@ -80,43 +77,41 @@ impl Extractor {
             let arr = Self::extract_py_arrow(arr)?;
             columns.push((name, arr));
         }
-        let batch = RecordBatch::try_from_iter(columns.into_iter()).unwrap();
-        let data_frame = std::iter::once(batch).collect();
-        Ok(Arc::new(data_frame))
+        Ok(RecordBatch::try_from_iter(columns.into_iter())
+            .unwrap()
+            .into())
     }
 
-    fn extract_polars_lazy(it: &PyAny) -> PyResult<DataFrameRef> {
+    fn extract_polars_lazy(it: &PyAny) -> PyResult<DataFrame> {
         let eager = it.call_method0("collect")?;
         Self::extract_polars_eager(eager)
     }
 
-    fn extract_py_arrow_batch(it: &PyAny) -> PyResult<DataFrameRef> {
+    fn extract_py_arrow_batch(it: &PyAny) -> PyResult<DataFrame> {
         let array = Self::extract_py_arrow(it)?;
         let struct_array = array.as_struct();
-        let data_frame = std::iter::once(RecordBatch::from(struct_array)).collect();
-        Ok(Arc::new(data_frame))
+        Ok(RecordBatch::from(struct_array).into())
     }
 
-    fn extract_py_arrow_table(it: &PyAny) -> PyResult<DataFrameRef> {
+    fn extract_py_arrow_table(it: &PyAny) -> PyResult<DataFrame> {
         let batches = it.call_method0("to_batches")?;
         let batches: &PyList = batches.downcast()?;
-        let data_frame = batches
+        batches
             .iter()
             .map(|b| {
                 let array = Self::extract_py_arrow(b)?;
                 let struct_array = array.as_struct();
                 Ok(RecordBatch::from(struct_array))
             })
-            .collect::<PyResult<_>>()?;
-        Ok(Arc::new(data_frame))
+            .collect::<PyResult<_>>()
     }
 
-    fn extract_duckdb(it: &PyAny) -> PyResult<DataFrameRef> {
+    fn extract_duckdb(it: &PyAny) -> PyResult<DataFrame> {
         let table = it.call_method0("arrow")?;
         Self::extract_py_arrow_table(table)
     }
 
-    pub fn extract(&self, py: Python, it: &PyAny) -> PyResult<DataFrameRef> {
+    pub fn extract(&self, py: Python, it: &PyAny) -> PyResult<DataFrame> {
         for (ty, lambda) in &self.0 {
             if it.is_instance(&ty.as_ref(py))? {
                 return lambda(it);
@@ -126,7 +121,7 @@ impl Extractor {
     }
 }
 
-struct Source(DataFrameRef);
+struct Source(DataFrame);
 
 impl<'a> FromPyObject<'a> for Source {
     fn extract(ob: &'a PyAny) -> PyResult<Self> {
@@ -147,7 +142,7 @@ enum Args {
 }
 
 impl Args {
-    pub fn parts(self) -> (String, DataFrameRef) {
+    pub fn parts(self) -> (String, DataFrame) {
         match self {
             Args::Named(n, s) => (n, s.0),
             Args::Simple(s) => ("py".into(), s.0),

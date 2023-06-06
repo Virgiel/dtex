@@ -2,7 +2,6 @@ use std::{
     ffi::{CStr, CString},
     fmt::Display,
     mem::MaybeUninit,
-    sync::Arc,
 };
 
 use arrow::{
@@ -118,7 +117,7 @@ impl Drop for Chunks {
 }
 
 pub struct Connection {
-    db: Arc<DB>,
+    _db: DB,
     con: duckdb_connection,
 }
 
@@ -133,10 +132,7 @@ impl Connection {
                 return Err(Error::Connect);
             }
         }
-        Ok(Self {
-            db: Arc::new(db),
-            con,
-        })
+        Ok(Self { _db: db, con })
     }
 
     pub fn execute(&self, query: &str) -> Result<()> {

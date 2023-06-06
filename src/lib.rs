@@ -43,6 +43,9 @@ pub fn run(sources: impl Iterator<Item = Source>) {
     for source in sources {
         app.add_tab(Tab::open(orchestrator.clone(), source));
     }
+    if app.tabs.is_empty() {
+        app.add_tab(Tab::open(orchestrator.clone(), Source::empty()));
+    }
     let mut terminal = Terminal::new(io::stdout()).unwrap();
     loop {
         terminal.draw(|c| app.draw(c)).unwrap();
