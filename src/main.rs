@@ -17,8 +17,8 @@ fn main() {
     dtex::run(
         args.files
             .into_iter()
-            .map(dtex::source::Source::from_path)
-            .chain(args.sql.map(|s| dtex::source::Source::from_sql(&s, None)))
+            .map(dtex::Source::from_path)
+            .chain(args.sql.map(|s| dtex::Source::from_sql(&s, None)))
             .map(|s| s.unwrap()),
     );
 }

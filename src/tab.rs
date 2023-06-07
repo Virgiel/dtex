@@ -3,10 +3,7 @@ use std::sync::Arc;
 use reedline::KeyCode;
 use tui::{crossterm::event::KeyEvent, Canvas};
 
-use crate::{
-    event::Orchestrator, grid::SourceGrid, shell::Shell, source::Source, spinner::Spinner, style,
-    OnKey,
-};
+use crate::{grid::SourceGrid, shell::Shell, source::Source, spinner::Spinner, style, OnKey, task::Runner};
 
 enum State {
     Normal,
@@ -21,10 +18,10 @@ pub struct Tab {
 }
 
 impl Tab {
-    pub fn open(orchestrator: Orchestrator, source: Source) -> Self {
+    pub fn open(runner: Runner, source: Source) -> Self {
         let source = Arc::new(source);
         Self {
-            grid: SourceGrid::new(source.clone(), orchestrator),
+            grid: SourceGrid::new(source.clone(), runner),
             state: State::Normal,
             shell: Shell::new(source.sql()),
             source,

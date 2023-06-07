@@ -2,55 +2,44 @@ use std::sync::Arc;
 
 use crate::{
     error::Result,
-    event::{Orchestrator, Task},
     grid::Frame,
     source::{DataFrame, Source},
+    task::{OnceCtx, OnceTask, Runner},
+    StrError,
 };
 
-pub struct Describer {
-    pub df: Option<Description>,
-    task: Option<Task<Description>>,
+pub enum Describer {
+    Pending(OnceTask<Description>),
+    Ready(Description),
+    Error(StrError),
 }
 
 impl Describer {
-    pub fn new() -> Self {
-        Self {
-            df: None,
-            task: None,
-        }
+    pub fn describe(source: Arc<Source>, runner: &Runner) -> Self {
+        Self::Pending(runner.once(move |ctx| describe(ctx, &source)))
     }
 
-    pub fn describe(&mut self, source: Arc<Source>, orchestrator: &Orchestrator) {
-        self.task = Some(orchestrator.task(move || describe(&source)))
-    }
-
-    pub fn tick(&mut self) -> Result<()> {
-        if let Some(task) = &mut self.task {
-            match task.tick() {
-                Ok(Some(df)) => {
-                    self.task = None;
-                    self.df = Some(df)
-                }
+    pub fn tick(&mut self) {
+        match self {
+            Describer::Pending(task) => match task.tick() {
+                Ok(Some(df)) => *self = Self::Ready(df),
                 Ok(None) => {}
-                Err(it) => {
-                    self.task = None;
-                    return Err(it);
-                }
-            }
+                Err(it) => *self = Self::Error(it),
+            },
+            Describer::Ready(_) | Describer::Error(_) => {}
         }
-        Ok(())
     }
 
-    pub fn cancel(&mut self) {
-        self.task.take();
-    }
-
-    pub fn is_running(&self) -> bool {
-        self.task.is_some() || self.df.is_some()
+    pub fn df(&self) -> Option<Result<&Description>> {
+        match self {
+            Describer::Pending(_) => None,
+            Describer::Ready(df) => Some(Ok(df)),
+            Describer::Error(e) => Some(Err(e.clone())),
+        }
     }
 
     pub fn is_loading(&self) -> bool {
-        self.task.is_some()
+        matches!(self, Describer::Pending(_))
     }
 }
 
@@ -78,9 +67,15 @@ impl Frame for Description {
     }
 }
 
-pub fn describe(source: &Source) -> crate::error::Result<Description> {
-    let df: Result<DataFrame> = source
-        .describe()?
+pub fn describe(ctx: OnceCtx, source: &Source) -> crate::error::Result<Description> {
+    let pending = source.describe()?;
+    while !pending.tick()? {
+        if ctx.canceled() {
+            return Err("canceled".into());
+        }
+    }
+    let df: Result<DataFrame> = pending
+        .execute()?
         .map(|d| d.map_err(|e| e.into()))
         .collect();
     Ok(Description(df?))
