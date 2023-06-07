@@ -14,7 +14,6 @@ use grid::nav::Nav;
 use notify::{RecommendedWatcher, Watcher};
 use notify_debouncer_full::FileIdMap;
 use reedline::KeyModifiers;
-use source::Source;
 use tab::Tab;
 use tui::{
     crossterm::event::{Event, KeyCode, KeyEventKind},
@@ -23,28 +22,31 @@ use tui::{
 };
 
 pub use arrow;
+pub use error::{Result, StrError};
+pub use source::{DataFrame, Source};
 
 mod describe;
 mod duckdb;
-pub mod error;
+mod error;
 mod event;
 mod fmt;
 mod grid;
 mod shell;
-pub mod source;
+mod source;
 mod spinner;
 mod style;
 mod tab;
+mod task;
 mod utils;
 
 pub fn run(sources: impl Iterator<Item = Source>) {
-    let (receiver, watcher, orchestrator) = event_listener();
+    let (receiver, watcher, runner) = event_listener();
     let mut app = App::new(watcher);
     for source in sources {
-        app.add_tab(Tab::open(orchestrator.clone(), source));
+        app.add_tab(Tab::open(runner.clone(), source));
     }
     if app.tabs.is_empty() {
-        app.add_tab(Tab::open(orchestrator.clone(), Source::empty()));
+        app.add_tab(Tab::open(runner, Source::empty()));
     }
     let mut terminal = Terminal::new(io::stdout()).unwrap();
     loop {

@@ -1,54 +1,13 @@
 use std::{
     sync::mpsc::{sync_channel, Receiver},
-    thread::{Builder, Thread},
+    thread::Builder,
     time::Duration,
 };
 
 use notify::RecommendedWatcher;
 use notify_debouncer_full::{new_debouncer, FileIdMap};
 
-/// Task orchestrator that generate event on task completion
-#[derive(Clone)]
-pub struct Orchestrator(Thread);
-
-impl Orchestrator {
-    pub fn wake(&self) {
-        self.0.unpark();
-    }
-
-    /// Start a new background task
-    pub fn task<T: Send + 'static>(
-        &self,
-        spawn: impl Fn() -> crate::error::Result<T> + Send + 'static,
-    ) -> Task<T> {
-        let (sender, receiver) = oneshot::channel();
-        let wake = self.0.clone();
-        std::thread::spawn(move || {
-            let result = spawn();
-            if sender.send(result).is_ok() {
-                // Only succeeded if the result is expected
-                wake.unpark();
-            }
-        });
-        Task(receiver)
-    }
-}
-
-pub struct Task<T>(oneshot::Receiver<crate::error::Result<T>>);
-
-impl<T> Task<T> {
-    pub fn tick(&mut self) -> crate::error::Result<Option<T>> {
-        match self.0.try_recv() {
-            Ok(result) => Some(result).transpose(),
-            Err(it) => match it {
-                oneshot::TryRecvError::Empty => Ok(None),
-                oneshot::TryRecvError::Disconnected => {
-                    Err("Task failed without error".to_string().into())
-                }
-            },
-        }
-    }
-}
+use crate::task::Runner;
 
 pub enum Event {
     Term(tui::crossterm::event::Event),
@@ -60,7 +19,7 @@ pub enum Event {
 pub fn event_listener() -> (
     Receiver<Event>,
     notify_debouncer_full::Debouncer<RecommendedWatcher, FileIdMap>,
-    Orchestrator,
+    Runner,
 ) {
     let (sender, receiver) = sync_channel(100);
     // Task completion listener
@@ -114,5 +73,5 @@ pub fn event_listener() -> (
         })
         .expect("Failed to start term_listener thread");
 
-    (receiver, debouncer, Orchestrator(waker))
+    (receiver, debouncer, Runner::from_waker(waker))
 }

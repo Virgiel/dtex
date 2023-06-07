@@ -6,7 +6,7 @@ use ::dtex::{
         ffi::{ArrowArray, ArrowArrayRef, FFI_ArrowArray, FFI_ArrowSchema},
         record_batch::RecordBatch,
     },
-    source::DataFrame,
+    DataFrame,
 };
 use pyo3::{
     exceptions::PyValueError, ffi::Py_uintptr_t, prelude::*, types::PyList, wrap_pyfunction,
@@ -154,7 +154,7 @@ impl Args {
 fn ex(sources: Vec<Args>) -> PyResult<()> {
     ::dtex::run(sources.into_iter().map(|s| {
         let (name, df) = s.parts();
-        ::dtex::source::Source::from_mem(name, df)
+        ::dtex::Source::from_mem(name, df)
     }));
     Ok(())
 }

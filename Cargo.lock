@@ -662,9 +662,9 @@ checksum = "fed44880c466736ef9a5c5b5facefb5ed0785676d0c02d612db14e54f0d84286"
 
 [[package]]
 name = "iana-time-zone"
-version = "0.1.56"
+version = "0.1.57"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0722cd7114b7de04316e7ea5456a0bbb20e4adb46fd27a3697adb812cff0f37c"
+checksum = "2fad5b825842d2b38bd206f3e81d6957625fd7f0a361e345c30e01a0ae2dd613"
 dependencies = [
  "android_system_properties",
  "core-foundation-sys",
@@ -879,7 +879,7 @@ checksum = "f92be4933c13fd498862a9e02a3055f8a8d9c039ce33db97306fd5a6caa7f29b"
 [[package]]
 name = "libduckdb-sys"
 version = "0.8.0"
-source = "git+https://github.com/Virgiel/duckdb-rs-tmp#3076b63260a0a898bfcfcf067cacfbf43f1e4c95"
+source = "git+https://github.com/Virgiel/duckdb-rs-tmp#dc5aeb28a6edd44ed60e15360f861fcdb65a296c"
 dependencies = [
  "autocfg",
  "cc",

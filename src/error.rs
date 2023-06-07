@@ -1,6 +1,6 @@
 use std::fmt::Display;
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct StrError(pub String);
 
 impl<D: Display> From<D> for StrError {

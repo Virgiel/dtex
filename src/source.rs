@@ -2,9 +2,8 @@ use std::{
     path::{Path, PathBuf},
     sync::{
         atomic::{AtomicUsize, Ordering},
-        Arc, Mutex,
+        Arc,
     },
-    thread::Thread,
 };
 
 use arrow::{
@@ -16,21 +15,16 @@ use tempfile::NamedTempFile;
 
 use crate::{
     array_to_iter,
-    duckdb::{Chunks, Connection},
+    duckdb::{self, Chunks, Connection},
     error::Result,
-    event::{Orchestrator, Task},
+    task::{Ctx, OnceTask, Runner, Task},
     Ty,
 };
 
-struct Pending {
+pub struct Pending {
     batches: Vec<RecordBatch>,
     full: bool,
     error: Option<String>,
-}
-
-pub struct StreamingState {
-    goal: AtomicUsize,
-    pending: Mutex<Pending>,
 }
 
 pub enum FrameSource {
@@ -40,8 +34,7 @@ pub enum FrameSource {
         error: String,
     },
     Streaming {
-        worker: Thread,
-        state: Arc<StreamingState>,
+        task: Task<AtomicUsize, Pending>,
         df: DataFrame,
         is_loading: bool,
     },
@@ -60,28 +53,19 @@ impl FrameSource {
         self.goal(usize::MAX);
     }
 
-    pub fn streaming(preload: DataFrame, chunks: Chunks, orchestrator: Orchestrator) -> Self {
-        let state = Arc::new(StreamingState {
-            goal: AtomicUsize::new(0),
-            pending: Mutex::new(Pending {
+    pub fn streaming(preload: DataFrame, chunks: Chunks, runner: Runner) -> Self {
+        let loaded = preload.num_rows();
+        let task = runner.task(
+            AtomicUsize::new(0),
+            Pending {
                 batches: vec![],
                 full: false,
                 error: None,
-            }),
-        });
-        let worker = {
-            let state = state.clone();
-            let loaded = preload.num_rows();
-            std::thread::Builder::new()
-                .name("streamer".into())
-                .spawn(move || worker(loaded, state, chunks, orchestrator))
-                .unwrap()
-        }
-        .thread()
-        .clone();
+            },
+            move |ctx| worker(ctx, loaded, chunks),
+        );
         Self::Streaming {
-            worker,
-            state,
+            task,
             df: preload,
             is_loading: true,
         }
@@ -89,47 +73,43 @@ impl FrameSource {
 
     pub fn tick(&mut self) {
         if let FrameSource::Streaming {
-            state,
+            task,
             df,
             is_loading,
             ..
         } = self
         {
-            let mut lock = state.pending.lock().unwrap();
-            df.extend(lock.batches.drain(..));
-            if lock.full {
-                drop(lock);
+            let (full, error) = task.lock(|p| {
+                df.extend(p.batches.drain(..));
+                (p.full, p.error.take())
+            });
+            if full {
                 *self = FrameSource::Full(std::mem::take(df))
-            } else if let Some(error) = lock.error.take() {
-                drop(lock);
+            } else if let Some(error) = error {
                 *self = FrameSource::Error {
                     df: std::mem::take(df),
                     error,
                 }
             } else {
-                drop(lock);
-                *is_loading = state.goal.load(Ordering::Relaxed) > df.num_rows();
+                *is_loading = task.state().load(Ordering::Relaxed) > df.num_rows();
             }
         }
     }
 
     pub fn goal(&self, goal: usize) {
         // Goal is only used when streaming
-        if let FrameSource::Streaming {
-            state, df, worker, ..
-        } = self
-        {
+        if let FrameSource::Streaming { task, df, .. } = self {
             // No need to update loading goal if already loaded
             if goal > df.num_rows() {
                 // Update goal only if we are not loading everything
-                if state
-                    .goal
+                if task
+                    .state()
                     .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |prev| {
                         (prev != usize::MAX).then_some(goal)
                     })
                     .is_ok()
                 {
-                    worker.unpark(); // Wake loader
+                    task.wake();
                 }
             }
         }
@@ -151,25 +131,11 @@ impl FrameSource {
     }
 }
 
-impl Drop for FrameSource {
-    fn drop(&mut self) {
-        if let Self::Streaming { worker, state, .. } = self {
-            drop(state); // Reduce arc count
-            worker.unpark() // Wake worker for cancelation
-        }
-    }
-}
-
-fn worker(
-    mut loaded: usize,
-    state: Arc<StreamingState>,
-    mut chunks: Chunks,
-    orchestrator: Orchestrator,
-) {
+fn worker(ctx: Ctx<AtomicUsize, Pending>, mut loaded: usize, mut chunks: Chunks) {
     let mut buff = Vec::new();
     loop {
-        while loaded < state.goal.load(Ordering::Relaxed) {
-            if Arc::strong_count(&state) == 1 {
+        while loaded < ctx.state().load(Ordering::Relaxed) {
+            if ctx.canceled() {
                 return;
             }
             match chunks.next() {
@@ -178,25 +144,24 @@ fn worker(
                     buff.push(batch)
                 }
                 Some(Err(err)) => {
-                    state.pending.lock().unwrap().error = Some(err.to_string());
-                    orchestrator.wake();
+                    ctx.lock(|p| p.error = Some(err.to_string()));
                     return;
                 }
                 None => {
-                    state.pending.lock().unwrap().batches.append(&mut buff);
-                    state.pending.lock().unwrap().full = true;
-                    orchestrator.wake();
+                    ctx.lock(|p| {
+                        p.batches.append(&mut buff);
+                        p.full = true;
+                    });
                     return;
                 }
             }
         }
-        if Arc::strong_count(&state) == 1 {
+        if ctx.canceled() {
             return;
         }
 
         if !buff.is_empty() {
-            state.pending.lock().unwrap().batches.append(&mut buff);
-            orchestrator.wake();
+            ctx.lock(|p| p.batches.append(&mut buff))
         }
         std::thread::park();
     }
@@ -204,27 +169,28 @@ fn worker(
 
 pub enum Loader {
     Finished(Option<FrameSource>),
-    Pending(Task<FrameSource>),
+    Pending(OnceTask<FrameSource>),
 }
 
 impl Loader {
-    pub fn streaming(source: Arc<Source>, orchestrator: &Orchestrator) -> Self {
-        Self::load(source, orchestrator, false)
-    }
-
-    fn load(source: Arc<Source>, orchestrator: &Orchestrator, materialize: bool) -> Self {
+    pub fn load(source: Arc<Source>, runner: &Runner) -> Self {
         if let Some(df) = source.sync_full() {
             Self::Finished(Some(FrameSource::full(df)))
         } else {
-            let orch = orchestrator.clone();
-            Self::Pending(orchestrator.task(move || {
-                let mut chunks = source.load(materialize)?;
+            let _runner = runner.clone();
+            Self::Pending(runner.once(move |ctx| {
+                let pending = source.load()?;
+                while !pending.tick()? {
+                    if ctx.canceled() {
+                        return Err("canceled".into());
+                    }
+                }
+                let mut chunks = pending.execute()?;
                 let preload = chunks
                     .next()
                     .map(|r| r.map(|r| r.into()))
                     .unwrap_or_else(|| Ok(DataFrame::default()))?;
-                let orch = orch.clone();
-                Ok(FrameSource::streaming(preload, chunks, orch))
+                Ok(FrameSource::streaming(preload, chunks, _runner))
             }))
         }
     }
@@ -378,27 +344,22 @@ impl Source {
         }
     }
 
-    pub fn describe(&self) -> Result<Chunks> {
+    pub fn describe(&self) -> Result<duckdb::Pending> {
         let sql = match &self.kind {
             Kind::Empty => return Err("Nothing to describe".into()),
             Kind::Sql { sql, .. } => format!("SUMMARIZE {sql}"),
             Kind::Eager { .. } | Kind::File { .. } => format!("SUMMARIZE SELECT * FROM current"),
         };
-        let df = self.con()?.materialize(&sql)?;
-        Ok(df)
+        Ok(self.con()?.query(&sql)?)
     }
 
-    pub fn load(&self, full: bool) -> Result<Chunks> {
+    pub fn load(&self) -> Result<duckdb::Pending> {
         let sql = match &self.kind {
             Kind::Empty => return Err("Nothing to load".into()),
             Kind::Sql { sql, .. } => sql,
             Kind::Eager { .. } | Kind::File { .. } => "SELECT * FROM current",
         };
-        if full {
-            Ok(self.con()?.materialize(sql)?)
-        } else {
-            Ok(self.con()?.stream(sql)?)
-        }
+        Ok(self.con()?.query(sql)?)
     }
 }
 

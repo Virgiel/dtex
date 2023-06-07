@@ -2,6 +2,7 @@ use std::{
     ffi::{CStr, CString},
     fmt::Display,
     mem::MaybeUninit,
+    sync::Arc,
 };
 
 use arrow::{
@@ -13,32 +14,21 @@ use libduckdb_sys::{
     duckdb_arrow_array, duckdb_arrow_schema, duckdb_close, duckdb_connect, duckdb_connection,
     duckdb_data_chunk, duckdb_data_chunk_arrow_array, duckdb_database, duckdb_destroy_data_chunk,
     duckdb_destroy_pending, duckdb_destroy_prepare, duckdb_destroy_result, duckdb_disconnect,
-    duckdb_execute_pending, duckdb_free, duckdb_open_ext, duckdb_pending_prepared_streaming,
-    duckdb_pending_result, duckdb_prepare, duckdb_prepare_error, duckdb_prepared_statement,
-    duckdb_query, duckdb_result, duckdb_result_arrow_schema, duckdb_result_error,
-    duckdb_result_get_chunk, duckdb_result_is_streaming, duckdb_stream_fetch_chunk, DuckDBSuccess,
+    duckdb_execute_pending, duckdb_free, duckdb_open_ext, duckdb_pending_error,
+    duckdb_pending_execute_task, duckdb_pending_prepared_streaming,
+    duckdb_pending_result, duckdb_pending_state_DUCKDB_PENDING_RESULT_NOT_READY,
+    duckdb_pending_state_DUCKDB_PENDING_RESULT_READY, duckdb_prepare, duckdb_prepare_error,
+    duckdb_prepared_statement, duckdb_query, duckdb_result, duckdb_result_arrow_schema,
+    duckdb_result_error, duckdb_result_get_chunk, duckdb_result_is_streaming,
+    duckdb_stream_fetch_chunk, DuckDBSuccess,
 };
 
 #[derive(Debug)]
-pub enum Error {
-    Open(String),
-    Connect,
-    Prepare(String),
-    Execute(String),
-    Chunk(String),
-    Unknown,
-}
+pub struct Error(String);
 
 impl Display for Error {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Error::Open(msg) => writeln!(f, "open: {msg}"),
-            Error::Connect => writeln!(f, "connect"),
-            Error::Prepare(msg) => writeln!(f, "open: {msg}"),
-            Error::Execute(msg) => writeln!(f, "open: {msg}"),
-            Error::Chunk(msg) => writeln!(f, "open: {msg}"),
-            Error::Unknown => writeln!(f, "unknown"),
-        }
+        f.write_str(&self.0)
     }
 }
 
@@ -63,7 +53,7 @@ impl DB {
                 let msg = CStr::from_ptr(err).to_string_lossy().to_string();
                 duckdb_free(err as *mut _);
                 duckdb_close(&mut db);
-                return Err(Error::Open(msg));
+                return Err(Error(msg));
             }
         }
         Ok(Self { db })
@@ -76,7 +66,58 @@ impl Drop for DB {
     }
 }
 
+pub struct Pending {
+    _handle: Arc<Con>,
+    pending: duckdb_pending_result,
+}
+
+impl Pending {
+    pub fn tick(&self) -> Result<bool> {
+        unsafe {
+            let state = duckdb_pending_execute_task(self.pending);
+
+            match state {
+                duckdb_pending_state_DUCKDB_PENDING_RESULT_NOT_READY => Ok(false),
+                duckdb_pending_state_DUCKDB_PENDING_RESULT_READY => Ok(true),
+                _ => {
+                    let err = duckdb_pending_error(self.pending);
+                    let msg = CStr::from_ptr(err).to_string_lossy().to_string();
+                    Err(Error(msg))
+                }
+            }
+        }
+    }
+
+    pub fn execute(self) -> Result<Chunks> {
+        let mut result: MaybeUninit<duckdb_result> = std::mem::MaybeUninit::uninit();
+
+        unsafe {
+            if duckdb_execute_pending(self.pending, result.as_mut_ptr()) != DuckDBSuccess {
+                duckdb_destroy_result(result.as_mut_ptr());
+                let err = duckdb_pending_error(self.pending);
+                let msg = CStr::from_ptr(err).to_string_lossy().to_string();
+                return Err(Error(msg));
+            }
+
+            Ok(Chunks {
+                _handle: self._handle.clone(),
+                result: result.assume_init(),
+                idx: 0,
+            })
+        }
+    }
+}
+
+unsafe impl Send for Pending {}
+
+impl Drop for Pending {
+    fn drop(&mut self) {
+        unsafe { duckdb_destroy_pending(&mut self.pending) }
+    }
+}
+
 pub struct Chunks {
+    _handle: Arc<Con>,
     result: duckdb_result,
     idx: u64,
 }
@@ -99,7 +140,7 @@ impl Iterator for Chunks {
                 let err = duckdb_result_error(&mut self.result);
                 if !err.is_null() {
                     let msg = CStr::from_ptr(err).to_string_lossy().to_string();
-                    return Some(Err(Error::Chunk(msg)));
+                    return Some(Err(Error(msg)));
                 }
                 return None;
             }
@@ -116,9 +157,19 @@ impl Drop for Chunks {
     }
 }
 
-pub struct Connection {
-    _db: DB,
+struct Con {
+    _db: Arc<DB>,
     con: duckdb_connection,
+}
+
+impl Drop for Con {
+    fn drop(&mut self) {
+        unsafe { duckdb_disconnect(&mut self.con) }
+    }
+}
+
+pub struct Connection {
+    con: Arc<Con>,
 }
 
 impl Connection {
@@ -129,21 +180,26 @@ impl Connection {
         unsafe {
             if duckdb_connect(db.db, &mut con) != DuckDBSuccess {
                 duckdb_disconnect(&mut con);
-                return Err(Error::Connect);
+                return Err(Error("Unkown connect error".into()));
             }
         }
-        Ok(Self { _db: db, con })
+        Ok(Self {
+            con: Arc::new(Con {
+                _db: Arc::new(db),
+                con,
+            }),
+        })
     }
 
     pub fn execute(&self, query: &str) -> Result<()> {
         let sql = CString::new(query).unwrap();
         let mut result: MaybeUninit<duckdb_result> = std::mem::MaybeUninit::uninit();
         unsafe {
-            if duckdb_query(self.con, sql.as_ptr(), result.as_mut_ptr()) != DuckDBSuccess {
+            if duckdb_query(self.con.con, sql.as_ptr(), result.as_mut_ptr()) != DuckDBSuccess {
                 let err = duckdb_result_error(result.as_mut_ptr());
                 let message = CStr::from_ptr(err).to_string_lossy().to_string();
                 duckdb_destroy_result(result.as_mut_ptr());
-                return Err(Error::Execute(message));
+                return Err(Error(message));
             } else {
                 duckdb_destroy_result(result.as_mut_ptr());
             }
@@ -151,60 +207,31 @@ impl Connection {
         Ok(())
     }
 
-    pub fn materialize(&self, query: &str) -> Result<Chunks> {
-        let sql = CString::new(query).unwrap();
-        let mut result: MaybeUninit<duckdb_result> = std::mem::MaybeUninit::uninit();
-
-        unsafe {
-            if duckdb_query(self.con, sql.as_ptr(), result.as_mut_ptr()) != DuckDBSuccess {
-                let err = duckdb_result_error(result.as_mut_ptr());
-                let message = CStr::from_ptr(err).to_string_lossy().to_string();
-                return Err(Error::Execute(message));
-            }
-
-            Ok(Chunks {
-                result: result.assume_init(),
-                idx: 0,
-            })
-        }
-    }
-
-    pub fn stream(&self, query: &str) -> Result<Chunks> {
+    pub fn query(&self, query: &str) -> Result<Pending> {
         let sql = CString::new(query).unwrap();
         let mut stmt: duckdb_prepared_statement = std::ptr::null_mut();
         let mut pending: duckdb_pending_result = std::ptr::null_mut();
-        let mut result: MaybeUninit<duckdb_result> = std::mem::MaybeUninit::uninit();
 
-        let tmp = (|| unsafe {
-            if duckdb_prepare(self.con, sql.as_ptr(), &mut stmt) != DuckDBSuccess {
+        unsafe {
+            if duckdb_prepare(self.con.con, sql.as_ptr(), &mut stmt) != DuckDBSuccess {
                 let err = duckdb_prepare_error(stmt);
                 let message = CStr::from_ptr(err).to_string_lossy().to_string();
-                return Err(Error::Prepare(message));
+                duckdb_destroy_prepare(&mut stmt);
+                return Err(Error(message));
             }
             if duckdb_pending_prepared_streaming(stmt, &mut pending) != DuckDBSuccess {
-                return Err(Error::Unknown);
+                duckdb_destroy_prepare(&mut stmt);
+                duckdb_destroy_pending(&mut pending);
+                return Err(Error("unknown pending error".into()));
             }
-            if duckdb_execute_pending(pending, result.as_mut_ptr()) != DuckDBSuccess {
-                duckdb_destroy_result(result.as_mut_ptr());
-                return Err(Error::Unknown);
-            }
-            Ok(())
-        })();
-        unsafe {
-            duckdb_destroy_prepare(&mut stmt);
-            duckdb_destroy_pending(&mut pending);
 
-            tmp.map(|_| Chunks {
-                result: result.assume_init(),
-                idx: 0,
+            duckdb_destroy_prepare(&mut stmt);
+
+            Ok(Pending {
+                _handle: self.con.clone(),
+                pending,
             })
         }
-    }
-}
-
-impl Drop for Connection {
-    fn drop(&mut self) {
-        unsafe { duckdb_disconnect(&mut self.con) }
     }
 }
 
