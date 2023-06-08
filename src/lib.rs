@@ -38,6 +38,7 @@ mod style;
 mod tab;
 mod task;
 mod utils;
+mod navigator;
 
 pub fn run(sources: impl Iterator<Item = Source>) {
     let (receiver, watcher, runner) = event_listener();
@@ -52,7 +53,7 @@ pub fn run(sources: impl Iterator<Item = Source>) {
     loop {
         terminal.draw(|c| app.draw(c)).unwrap();
         let mut event = if app.is_loading() {
-            match receiver.recv_timeout(Duration::from_millis(250)) {
+            match receiver.recv_timeout(Duration::from_millis(100)) {
                 Ok(e) => Some(e),
                 Err(err) => match err {
                     RecvTimeoutError::Timeout => None,
@@ -93,7 +94,7 @@ impl App {
             self.debouncer
                 .watcher()
                 .watch(path, notify::RecursiveMode::NonRecursive)
-                .unwrap();
+                .ok();
         }
         self.tabs.push(tab);
     }
@@ -190,7 +191,7 @@ impl App {
                                         .iter_mut()
                                         .find(|t| t.source.path() == Some(path.as_path()))
                                     {
-                                        tab.set_source(Source::from_path(path).unwrap())
+                                        tab.set_source(Source::from_path(path))
                                     }
                                 }
                             }

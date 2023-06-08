@@ -12,7 +12,7 @@ use crate::{
     OnKey, Ty,
 };
 
-use self::frame_grid::FrameGrid;
+use self::{frame_grid::FrameGrid, nav::Nav};
 
 mod frame_grid;
 pub mod nav;
@@ -86,7 +86,7 @@ impl SourceGrid {
         if let State::Description(desrc) = &mut self.state {
             desrc.tick();
         }
-        self.frame.goal(self.grid.nav.c_row() + 1);
+        self.frame.goal(self.grid.nav.goal().saturating_add(1));
         self.frame.tick();
 
         // Draw error bar
@@ -96,18 +96,37 @@ impl SourceGrid {
         }
 
         match &self.state {
-            State::Normal => self.grid.draw(c, self.frame.df()),
+            State::Normal => self
+                .grid
+                .draw(c, self.frame.df())
+                .streaming(self.frame.is_streaming()),
             State::Description(d) => match d.df() {
-                None => self.grid.draw(c, self.frame.df()),
-                Some(Ok(df)) => self.d_grid.draw(c, df).normal(Status::Description),
+                None => self
+                    .grid
+                    .draw(c, self.frame.df())
+                    .streaming(self.frame.is_streaming()),
+                Some(Ok(df)) => self.d_grid.draw(c, df),
                 Some(Err(err)) => {
                     let mut l = c.btm();
                     l.draw(err.0, style::error());
-                    self.d_grid
-                        .draw(c, &DataFrame::empty())
-                        .normal(Status::Description)
+                    self.d_grid.draw(c, &DataFrame::empty())
                 }
-            },
+            }
+            .normal(Status::Description),
+        }
+    }
+
+    pub fn nav(&self) -> Nav {
+        match &self.state {
+            State::Normal => self.grid.nav.clone(),
+            State::Description(_) => self.d_grid.nav.clone(),
+        }
+    }
+
+    pub fn set_nav(&mut self, nav: Nav) {
+        match &self.state {
+            State::Normal => self.grid.nav = nav,
+            State::Description(_) => self.d_grid.nav = nav,
         }
     }
 
@@ -115,7 +134,6 @@ impl SourceGrid {
         self.set_err(String::new());
         match self.state {
             State::Normal => match (self.grid.on_key(event), event.code) {
-                (OnKey::Pass, KeyCode::Char('a')) => self.frame.load_all(),
                 (OnKey::Pass, KeyCode::Char('d')) => {
                     self.state =
                         State::Description(Describer::describe(self.source.clone(), &self.runner))

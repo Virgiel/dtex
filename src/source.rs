@@ -49,10 +49,6 @@ impl FrameSource {
         Self::Full(full)
     }
 
-    pub fn load_all(&mut self) {
-        self.goal(usize::MAX);
-    }
-
     pub fn streaming(preload: DataFrame, chunks: Chunks, runner: Runner) -> Self {
         let loaded = preload.num_rows();
         let task = runner.task(
@@ -96,19 +92,16 @@ impl FrameSource {
         }
     }
 
+    /// Update the loading goal
     pub fn goal(&self, goal: usize) {
         // Goal is only used when streaming
         if let FrameSource::Streaming { task, df, .. } = self {
-            // No need to update loading goal if already loaded
-            if goal > df.num_rows() {
-                // Update goal only if we are not loading everything
-                if task
-                    .state()
-                    .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |prev| {
-                        (prev != usize::MAX).then_some(goal)
-                    })
-                    .is_ok()
-                {
+            let prev = task.state().load(Ordering::Relaxed);
+            if prev != goal {
+                // Update goal
+                task.state().store(goal, Ordering::Relaxed);
+                // Wake worker if it need to start/stop working
+                if prev > df.num_rows() || goal > df.num_rows() || true {
                     task.wake();
                 }
             }
@@ -123,6 +116,10 @@ impl FrameSource {
         }
     }
 
+    pub fn is_streaming(&self) -> bool {
+        !matches!(self, FrameSource::Full(_))
+    }
+
     pub fn is_loading(&self) -> bool {
         match self {
             FrameSource::Full(_) | FrameSource::Error { .. } => false,
@@ -132,7 +129,7 @@ impl FrameSource {
 }
 
 fn worker(ctx: Ctx<AtomicUsize, Pending>, mut loaded: usize, mut chunks: Chunks) {
-    let mut buff = Vec::new();
+    let mut buff = Vec::with_capacity(50);
     loop {
         while loaded < ctx.state().load(Ordering::Relaxed) {
             if ctx.canceled() {
@@ -141,7 +138,10 @@ fn worker(ctx: Ctx<AtomicUsize, Pending>, mut loaded: usize, mut chunks: Chunks)
             match chunks.next() {
                 Some(Ok(batch)) => {
                     loaded += batch.num_rows();
-                    buff.push(batch)
+                    buff.push(batch);
+                    if buff.len() == buff.capacity() {
+                        ctx.lock(|p| p.batches.append(&mut buff))
+                    }
                 }
                 Some(Err(err)) => {
                     ctx.lock(|p| p.error = Some(err.to_string()));
@@ -253,11 +253,8 @@ impl Source {
         }
     }
 
-    pub fn from_path(path: PathBuf) -> Result<Self> {
-        let con = Connection::mem()?;
-        con.execute(&format!("CREATE VIEW current AS SELECT * FROM {path:?}"))?;
-
-        Ok(Self {
+    pub fn from_path(path: PathBuf) -> Self {
+        Self {
             name: path
                 .file_stem()
                 .unwrap_or_default()
@@ -267,17 +264,17 @@ impl Source {
                 display_path: path.to_string_lossy().to_string(),
                 path: path.canonicalize().unwrap_or(path),
             },
-        })
+        }
     }
 
-    pub fn from_sql(sql: &str, current: Option<Arc<Self>>) -> Result<Self> {
-        Ok(Self {
+    pub fn from_sql(sql: &str, current: Option<Arc<Self>>) -> Self {
+        Self {
             name: "shell".into(),
             kind: Kind::Sql {
                 sql: sql.to_string(),
                 current,
             },
-        })
+        }
     }
 
     fn init(&self, con: Connection) -> Result<Connection> {

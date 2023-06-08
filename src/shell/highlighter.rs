@@ -1,13 +1,15 @@
 use sqlparser::{dialect::DuckDbDialect, keywords::Keyword, tokenizer::Token};
 use tui::{none, Color, Style};
 
+/// SQL highlighter
 pub struct Highlighter {
     styles: Vec<(u64, Style)>,
     idx: usize,
 }
 
 impl Highlighter {
-    pub fn new(query: &str) -> Self {
+    /// Create a new highlighter fir the given query
+    pub fn load(query: &str) -> Self {
         let mut tmp = Self {
             styles: vec![(0, tui::none())],
             idx: 0,
@@ -74,6 +76,7 @@ impl Highlighter {
         tmp
     }
 
+    /// Return the style at the given position
     pub fn style(&mut self, pos: u64) -> Style {
         // Move left
         while pos < self.styles[self.idx].0 {

@@ -1,3 +1,5 @@
+/// Navigation state
+#[derive(Clone)]
 pub struct Nav {
     // Offset positions
     o_row: usize,
@@ -35,6 +37,10 @@ impl Nav {
 
     pub fn c_col(&self) -> usize {
         self.c_col
+    }
+
+    pub fn goal(&self) -> usize {
+        self.t_row
     }
 
     pub fn up(&mut self) {
@@ -77,7 +83,7 @@ impl Nav {
     }
 
     pub fn btm(&mut self) {
-        self.c_row = self.m_row;
+        self.c_row = usize::MAX;
         self.t_row = self.c_row;
     }
 

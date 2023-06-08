@@ -38,13 +38,13 @@ impl<T: Default, const N: usize> HistoryBuffer<T, N> {
     }
 }
 
-pub struct Prompt {
-    history: HistoryBuffer<String, 16>,
+pub struct Prompt<const H: usize> {
+    history: HistoryBuffer<String, H>,
     pos: Option<usize>,
     buffer: LineBuffer,
 }
 
-impl Prompt {
+impl<const H: usize> Prompt<H> {
     pub fn new(init: &str) -> Self {
         let mut history = HistoryBuffer::new();
         if !init.trim().is_empty() {
@@ -99,7 +99,6 @@ impl Prompt {
                 self.pos = keep.then_some(0);
                 self.buffer.clear();
             }
-            PromptCmd::Jump(pos) => self.buffer.set_insertion_point(pos),
         }
     }
 
@@ -122,5 +121,4 @@ pub enum PromptCmd {
     Next,
     New(bool),
     Delete,
-    Jump(usize),
 }

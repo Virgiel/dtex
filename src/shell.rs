@@ -9,10 +9,10 @@ use self::{
 };
 
 mod highlighter;
-mod prompt;
+pub mod prompt;
 
 pub struct Shell {
-    prompt: Prompt,
+    prompt: Prompt<15>,
     offset: usize,
 }
 
@@ -53,7 +53,7 @@ impl Shell {
         let mut l = c.btm();
         l.draw("$ ", style::separator());
         let (str, cursor) = self.prompt.state();
-        let mut highlighter = Highlighter::new(str);
+        let mut highlighter = Highlighter::load(str);
         let mut pending_cursor = true;
 
         let mut w = l.width();

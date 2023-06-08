@@ -4,12 +4,14 @@ use reedline::KeyCode;
 use tui::{crossterm::event::KeyEvent, Canvas};
 
 use crate::{
-    grid::SourceGrid, shell::Shell, source::Source, spinner::Spinner, style, task::Runner, OnKey,
+    grid::SourceGrid, navigator::Navigator, shell::Shell, source::Source, spinner::Spinner, style,
+    task::Runner, OnKey,
 };
 
 enum State {
     Normal,
     Shell,
+    Nav(Navigator),
 }
 pub struct Tab {
     grid: SourceGrid,
@@ -40,8 +42,10 @@ impl Tab {
     pub fn draw(&mut self, c: &mut Canvas) {
         let status_line = c.reserve_btm(1);
 
-        if let State::Shell = self.state {
-            self.shell.draw(c);
+        match &mut self.state {
+            State::Normal => {}
+            State::Shell => self.shell.draw(c),
+            State::Nav(nav) => nav.draw(c),
         }
 
         // Draw grid
@@ -49,13 +53,15 @@ impl Tab {
             col_name,
             progress,
             status,
+            streaming,
         } = self.grid.draw(c);
 
         let mut l = c.consume(status_line).btm();
         let (status, style) = match status {
             Status::Normal => match self.state {
-                State::Normal => ("  EX  ", style::state_default()),
-                State::Shell => (" SHELL ", style::state_action()),
+                State::Normal => (" DTEX ", style::state_default()),
+                State::Shell => (" $SQL ", style::state_action()),
+                State::Nav(_) => (" GOTO ", style::state_action()),
             },
             Status::Description => (" DESC ", style::state_other()),
             Status::Size => (" SIZE ", style::state_action()),
@@ -77,7 +83,11 @@ impl Tab {
             self.spinner.state(false);
         }
         if !task_progress {
-            l.rdraw(format_args!(" {progress:>3}%"), style::primary());
+            if streaming {
+                l.rdraw(format_args!(" ~"), style::primary());
+            } else {
+                l.rdraw(format_args!(" {progress:>3}%"), style::primary());
+            }
         }
 
         if let Some(name) = col_name {
@@ -90,27 +100,31 @@ impl Tab {
     }
 
     pub fn on_key(&mut self, event: &KeyEvent) -> bool {
-        match self.state {
+        match &mut self.state {
             State::Normal => match (self.grid.on_key(event), event.code) {
                 (OnKey::Pass, KeyCode::Char('$')) => self.state = State::Shell,
+                (OnKey::Pass, code) if Navigator::activate(&code) => {
+                    self.state = State::Nav(Navigator::new(self.grid.nav()));
+                    return self.on_key(event);
+                }
                 (e, _) => return e == OnKey::Quit,
             },
             State::Shell => {
                 if let OnKey::Quit = self.shell.on_key(event, |str| {
-                    match Source::from_sql(str, Some(self.source.clone())) {
-                        Ok(source) => {
-                            self.grid.set_source(Arc::new(source));
-                            true
-                        }
-                        Err(e) => {
-                            self.grid.set_err(e.0);
-                            false
-                        }
-                    }
+                    let source = Source::from_sql(str, Some(self.source.clone()));
+                    self.grid.set_source(Arc::new(source));
+                    true
                 }) {
                     self.state = State::Normal
                 }
             }
+            State::Nav(nav) => match nav.on_key(event.code) {
+                Ok(nav) => self.grid.set_nav(nav),
+                Err(nav) => {
+                    self.grid.set_nav(nav);
+                    self.state = State::Normal
+                }
+            },
         }
         false
     }
@@ -131,6 +145,7 @@ pub enum Status {
 pub struct GridUI {
     pub col_name: Option<String>, // TODO borrow
     pub progress: usize,
+    pub streaming: bool,
     pub status: Status,
 }
 
@@ -139,6 +154,11 @@ impl GridUI {
         if self.status == Status::Normal {
             self.status = status
         }
+        self
+    }
+
+    pub fn streaming(mut self, streaming: bool) -> Self {
+        self.streaming = streaming;
         self
     }
 }

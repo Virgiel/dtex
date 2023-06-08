@@ -215,6 +215,7 @@ impl FrameGrid {
         GridUI {
             col_name: (self.projection.nb_cols() > 0).then(|| df.col_name(self.nav.c_col())),
             progress: ((self.nav.c_row() + 1) * 100) / nb_row.max(1),
+            streaming: true,
             status: match self.state {
                 State::Normal => Status::Normal,
                 State::Size => Status::Size,
