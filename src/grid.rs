@@ -48,16 +48,16 @@ impl SourceGrid {
         }
     }
 
-    pub fn is_loading(&self) -> Option<&'static str> {
+    pub fn is_loading(&self) -> Option<(&'static str, f64)> {
         if let State::Description(desrc) = &self.state {
-            if desrc.is_loading() {
-                return Some("describe");
+            if let Some(progress) = desrc.is_loading() {
+                return Some(("describe", progress));
             }
         }
-        if self.loader.is_loading() {
-            Some("load")
+        if let Some(progress) = self.loader.is_loading() {
+            Some(("load", progress))
         } else if self.frame.is_loading() {
-            Some("stream")
+            Some(("stream", -1.))
         } else {
             None
         }

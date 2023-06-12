@@ -1,7 +1,12 @@
 use std::{
-    sync::{Arc, Mutex},
+    sync::{
+        atomic::{AtomicBool, Ordering},
+        Arc, Mutex,
+    },
     thread::Thread,
 };
+
+use crate::duckdb::{ConnCtx, Connection};
 
 #[derive(Clone)]
 pub struct Runner(Thread);
@@ -11,25 +16,35 @@ impl Runner {
         Self(waker)
     }
 
-    /// Start a new one shot background task
-    pub fn once<T: Send + 'static>(
+    /// Start a new duckdb background task
+    pub fn duckdb<T: Send + 'static>(
         &self,
-        task: impl FnOnce(OnceCtx) -> crate::error::Result<T> + Send + 'static,
-    ) -> OnceTask<T> {
-        let _witness = Arc::new(());
+        task: impl FnOnce(Connection) -> crate::error::Result<T> + Send + 'static,
+    ) -> DuckTask<T> {
         let (sender, receiver) = oneshot::channel();
         let wake = self.0.clone();
+        let done = Arc::new(AtomicBool::new(false));
+
+        let mem = Connection::mem().expect("TODO");
+        mem.execute("SET enable_progress_bar=true; SET enable_progress_bar_print=false;")
+            .expect("TODO");
+        let ctx = mem.ctx();
         {
-            let _witness = _witness.clone();
+            let done = done.clone();
             std::thread::spawn(move || {
-                let result = task(OnceCtx(_witness));
+                let result = task(mem);
+                done.store(true, Ordering::Relaxed);
                 if sender.send(result).is_ok() {
                     // Only succeeded if the result is expected
                     wake.unpark();
                 }
             });
         }
-        OnceTask { receiver, _witness }
+        DuckTask {
+            receiver,
+            ctx,
+            done,
+        }
     }
 
     /// Start a new background task
@@ -113,20 +128,17 @@ impl<S, T> Drop for Task<S, T> {
     }
 }
 
-pub struct OnceCtx(Arc<()>);
-
-impl OnceCtx {
-    pub fn canceled(&self) -> bool {
-        Arc::strong_count(&self.0) == 1
-    }
-}
-
-pub struct OnceTask<T> {
+pub struct DuckTask<T> {
     receiver: oneshot::Receiver<crate::error::Result<T>>,
-    _witness: Arc<()>,
+    ctx: ConnCtx,
+    done: Arc<AtomicBool>,
 }
 
-impl<T> OnceTask<T> {
+impl<T> DuckTask<T> {
+    pub fn progress(&self) -> f64 {
+        self.ctx.progress()
+    }
+
     pub fn tick(&mut self) -> crate::error::Result<Option<T>> {
         match self.receiver.try_recv() {
             Ok(result) => Some(result).transpose(),
@@ -136,6 +148,14 @@ impl<T> OnceTask<T> {
                     Err("Task failed without error".to_string().into())
                 }
             },
+        }
+    }
+}
+
+impl<T> Drop for DuckTask<T> {
+    fn drop(&mut self) {
+        if !self.done.load(Ordering::Relaxed) {
+            self.ctx.interrupt()
         }
     }
 }

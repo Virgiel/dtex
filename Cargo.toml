@@ -16,8 +16,6 @@ tempfile = "3.5.0"
 bstr = "1.5.0"
 # Fast lexical conversion
 lexical-core = "0.8.5"
-# Time library
-chrono = "0.4.25"
 # CLI args parser
 clap = { version = "4.3.0", features = ["derive"] }
 # Efficient oneshot channel

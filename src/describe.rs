@@ -1,22 +1,23 @@
 use std::sync::Arc;
 
 use crate::{
+    duckdb::Connection,
     error::Result,
     grid::Frame,
     source::{DataFrame, Source},
-    task::{OnceCtx, OnceTask, Runner},
+    task::{DuckTask, Runner},
     StrError,
 };
 
 pub enum Describer {
-    Pending(OnceTask<Description>),
+    Pending(DuckTask<Description>),
     Ready(Description),
     Error(StrError),
 }
 
 impl Describer {
     pub fn describe(source: Arc<Source>, runner: &Runner) -> Self {
-        Self::Pending(runner.once(move |ctx| describe(ctx, &source)))
+        Self::Pending(runner.duckdb(move |ctx| describe(ctx, &source)))
     }
 
     pub fn tick(&mut self) {
@@ -38,8 +39,11 @@ impl Describer {
         }
     }
 
-    pub fn is_loading(&self) -> bool {
-        matches!(self, Describer::Pending(_))
+    pub fn is_loading(&self) -> Option<f64> {
+        match self {
+            Describer::Pending(task) => Some(task.progress()),
+            Describer::Ready(_) | Describer::Error(_) => None,
+        }
     }
 }
 
@@ -67,15 +71,9 @@ impl Frame for Description {
     }
 }
 
-pub fn describe(ctx: OnceCtx, source: &Source) -> crate::error::Result<Description> {
-    let pending = source.describe()?;
-    while !pending.tick()? {
-        if ctx.canceled() {
-            return Err("canceled".into());
-        }
-    }
-    let df: Result<DataFrame> = pending
-        .execute()?
+pub fn describe(con: Connection, source: &Source) -> crate::error::Result<Description> {
+    let df: Result<DataFrame> = source
+        .describe(con)?
         .map(|d| d.map_err(|e| e.into()))
         .collect();
     Ok(Description(df?))

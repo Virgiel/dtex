@@ -243,29 +243,32 @@ macro_rules! iter {
     ($m:expr, $map:expr) => {
         Box::new($m.iter().map(|b| b.map($map).unwrap_or(Ty::Null)))
     };
+    ($array:expr, $m:ty, $map:expr) => {
+        iter!($array.as_primitive::<$m>(), $map)
+    };
+    ($array:expr, $m:ty, $ty:ident, $native:ty) => {
+        iter!($array, $m, |v| Ty::$ty(v as $native))
+    };
 }
 
 pub fn array_to_iter(array: &ArrayRef) -> Box<dyn Iterator<Item = Ty<'_>> + '_> {
+    #[allow(clippy::unnecessary_cast)]
     match array.data_type() {
         DataType::Null => Box::new((0..array.len()).map(|_| Ty::Null)),
         DataType::Boolean => iter!(array.as_boolean(), Ty::Bool),
-        DataType::Int8 => iter!(array.as_primitive::<Int8Type>(), |v| Ty::I(v as i128)),
-        DataType::Int16 => iter!(array.as_primitive::<Int16Type>(), |v| Ty::I(v as i128)),
-        DataType::Int32 => iter!(array.as_primitive::<Int32Type>(), |v| Ty::I(v as i128)),
-        DataType::Int64 => iter!(array.as_primitive::<Int64Type>(), |v| Ty::I(v as i128)),
-        DataType::UInt8 => iter!(array.as_primitive::<UInt8Type>(), |v| Ty::U(v as u64)),
-        DataType::UInt16 => iter!(array.as_primitive::<UInt16Type>(), |v| Ty::U(v as u64)),
-        DataType::UInt32 => iter!(array.as_primitive::<UInt32Type>(), |v| Ty::U(v as u64)),
-        DataType::UInt64 => iter!(array.as_primitive::<UInt64Type>(), |v| Ty::U(v as u64)),
+        DataType::Int8 => iter!(array, Int8Type, I, i128),
+        DataType::Int16 => iter!(array, Int16Type, I, i128),
+        DataType::Int32 => iter!(array, Int32Type, I, i128),
+        DataType::Int64 => iter!(array, Int64Type, I, i128),
+        DataType::UInt8 => iter!(array, UInt8Type, U, u64),
+        DataType::UInt16 => iter!(array, UInt16Type, U, u64),
+        DataType::UInt32 => iter!(array, UInt32Type, U, u64),
+        DataType::UInt64 => iter!(array, UInt64Type, U, u64),
         DataType::Float16 => {
-            iter!(array.as_primitive::<Float16Type>(), |v| Ty::F(v.to_f64()))
+            iter!(array, Float16Type, |v| Ty::F(v.to_f64()))
         }
-        DataType::Float32 => {
-            iter!(array.as_primitive::<Float32Type>(), |v| Ty::F(v as f64))
-        }
-        DataType::Float64 => {
-            iter!(array.as_primitive::<Float64Type>(), |v| Ty::F(v as f64))
-        }
+        DataType::Float32 => iter!(array, Float32Type, F, f64),
+        DataType::Float64 => iter!(array, Float64Type, F, f64),
         DataType::Utf8 => {
             iter!(array.as_string::<i32>(), |v| Ty::Str(Cow::Borrowed(
                 v.into()

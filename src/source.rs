@@ -15,9 +15,9 @@ use tempfile::NamedTempFile;
 
 use crate::{
     array_to_iter,
-    duckdb::{self, Chunks, Connection},
+    duckdb::{Chunks, Connection},
     error::Result,
-    task::{Ctx, OnceTask, Runner, Task},
+    task::{Ctx, DuckTask, Runner, Task},
     Ty,
 };
 
@@ -169,7 +169,7 @@ fn worker(ctx: Ctx<AtomicUsize, Pending>, mut loaded: usize, mut chunks: Chunks)
 
 pub enum Loader {
     Finished(Option<FrameSource>),
-    Pending(OnceTask<FrameSource>),
+    Pending(DuckTask<FrameSource>),
 }
 
 impl Loader {
@@ -178,14 +178,8 @@ impl Loader {
             Self::Finished(Some(FrameSource::full(df)))
         } else {
             let _runner = runner.clone();
-            Self::Pending(runner.once(move |ctx| {
-                let pending = source.load()?;
-                while !pending.tick()? {
-                    if ctx.canceled() {
-                        return Err("canceled".into());
-                    }
-                }
-                let mut chunks = pending.execute()?;
+            Self::Pending(runner.duckdb(move |con| {
+                let mut chunks = source.load(con)?;
                 let preload = chunks
                     .next()
                     .map(|r| r.map(|r| r.into()))
@@ -212,8 +206,11 @@ impl Loader {
         }
     }
 
-    pub fn is_loading(&self) -> bool {
-        matches!(self, Loader::Pending(_))
+    pub fn is_loading(&self) -> Option<f64> {
+        match self {
+            Loader::Finished(_) => None,
+            Loader::Pending(task) => Some(task.progress()),
+        }
     }
 }
 
@@ -283,12 +280,11 @@ impl Source {
         })
     }
 
-    fn con(&self) -> Result<Connection> {
+    fn init(&self, con: Connection) -> Result<Connection> {
         Ok(match &self.kind {
-            Kind::Empty => Connection::mem()?,
+            Kind::Empty => con,
             Kind::Eager { df, parquet } => {
                 let file = parquet.get_or_try_init(|| df.to_parquet())?;
-                let con = Connection::mem()?;
                 con.execute(&format!(
                     "CREATE VIEW current AS SELECT * FROM read_parquet({:?})",
                     file.path()
@@ -296,11 +292,10 @@ impl Source {
                 con
             }
             Kind::Sql { current, .. } => match current {
-                Some(it) => it.con()?,
-                None => Connection::mem()?,
+                Some(it) => it.init(con)?,
+                None => con,
             },
             Kind::File { display_path, .. } => {
-                let con = Connection::mem()?;
                 con.execute(&format!(
                     "CREATE VIEW current AS SELECT * FROM '{display_path}'"
                 ))?;
@@ -344,22 +339,22 @@ impl Source {
         }
     }
 
-    pub fn describe(&self) -> Result<duckdb::Pending> {
+    pub fn describe(&self, con: Connection) -> Result<Chunks> {
         let sql = match &self.kind {
             Kind::Empty => return Err("Nothing to describe".into()),
             Kind::Sql { sql, .. } => format!("SUMMARIZE {sql}"),
-            Kind::Eager { .. } | Kind::File { .. } => format!("SUMMARIZE SELECT * FROM current"),
+            Kind::Eager { .. } | Kind::File { .. } => "SUMMARIZE SELECT * FROM current".into(),
         };
-        Ok(self.con()?.query(&sql)?)
+        Ok(self.init(con)?.query(&sql)?)
     }
 
-    pub fn load(&self) -> Result<duckdb::Pending> {
+    pub fn load(&self, con: Connection) -> Result<Chunks> {
         let sql = match &self.kind {
             Kind::Empty => return Err("Nothing to load".into()),
             Kind::Sql { sql, .. } => sql,
             Kind::Eager { .. } | Kind::File { .. } => "SELECT * FROM current",
         };
-        Ok(self.con()?.query(sql)?)
+        Ok(self.init(con)?.query(sql)?)
     }
 }
 
