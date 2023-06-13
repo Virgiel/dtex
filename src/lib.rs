@@ -1,4 +1,6 @@
-use std::{borrow::Cow, io, sync::mpsc::RecvTimeoutError, time::Duration};
+use std::{
+    borrow::Cow, fmt::Write, io, str::FromStr, sync::mpsc::RecvTimeoutError, time::Duration,
+};
 
 use arrow::{
     array::{ArrayRef, AsArray, Decimal128Array},
@@ -7,7 +9,7 @@ use arrow::{
         UInt16Type, UInt32Type, UInt64Type, UInt8Type,
     },
 };
-use bstr::BStr;
+use bstr::{BStr, BString};
 use event::event_listener;
 use fmt::rtrim;
 use grid::nav::Nav;
@@ -31,6 +33,7 @@ mod error;
 mod event;
 mod fmt;
 mod grid;
+mod navigator;
 mod shell;
 mod source;
 mod spinner;
@@ -38,7 +41,6 @@ mod style;
 mod tab;
 mod task;
 mod utils;
-mod navigator;
 
 pub fn run(sources: impl Iterator<Item = Source>) {
     let (receiver, watcher, runner) = event_listener();
@@ -232,6 +234,17 @@ impl Ty<'_> {
     pub fn is_str(&self) -> bool {
         matches!(self, Ty::Str(_))
     }
+
+    pub fn fmt(&self, out: &mut String) {
+        match self {
+            Ty::Null => {}
+            Ty::Bool(it) => writeln!(out, "{it}").unwrap(),
+            Ty::Str(it) => writeln!(out, "{it}").unwrap(),
+            Ty::U(it) => writeln!(out, "{it}").unwrap(),
+            Ty::I(it) => writeln!(out, "{it}").unwrap(),
+            Ty::F(it) => writeln!(out, "{it}").unwrap(),
+        }
+    }
 }
 
 impl<'a> From<&'a str> for Ty<'a> {
@@ -250,6 +263,19 @@ macro_rules! iter {
     ($array:expr, $m:ty, $ty:ident, $native:ty) => {
         iter!($array, $m, |v| Ty::$ty(v as $native))
     };
+}
+
+fn fmt_list(array: ArrayRef) -> Ty<'static> {
+    let mut out = "[".into();
+    for ty in array_to_iter(&array) {
+        ty.fmt(&mut out);
+        out.push(',');
+    }
+    if out.len() > 1 {
+        out.pop();
+    }
+    out.push_str("]");
+    Ty::Str(Cow::Owned(BString::from(out)))
 }
 
 pub fn array_to_iter(array: &ArrayRef) -> Box<dyn Iterator<Item = Ty<'_>> + '_> {
@@ -281,6 +307,9 @@ pub fn array_to_iter(array: &ArrayRef) -> Box<dyn Iterator<Item = Ty<'_>> + '_> 
         DataType::Decimal128(_, _) => {
             let array: &Decimal128Array = array.as_any().downcast_ref().unwrap();
             iter!(array, |v| Ty::I(v as i128))
+        }
+        DataType::List(_) => {
+            iter!(array.as_list::<i32>(), |v| fmt_list(v))
         }
         ty => unimplemented!("{ty}"),
     }
