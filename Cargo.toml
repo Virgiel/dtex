@@ -12,8 +12,6 @@ tui = { git = "https://github.com/Virgiel/tui" }
 reedline = "0.20.0"
 # Temporary file
 tempfile = "3.5.0"
-# Binary string helper
-bstr = "1.5.0"
 # Fast lexical conversion
 lexical-core = "0.8.5"
 # CLI args parser

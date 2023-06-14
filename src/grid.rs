@@ -5,11 +5,12 @@ use tui::{crossterm::event::KeyEvent, Canvas};
 
 use crate::{
     describe::Describer,
+    fmt::Col,
     source::{DataFrame, FrameSource, Loader, Source},
     style,
     tab::{GridUI, Status},
     task::Runner,
-    OnKey, Ty,
+    OnKey,
 };
 
 use self::{frame_grid::FrameGrid, nav::Nav};
@@ -152,9 +153,9 @@ impl SourceGrid {
 pub trait Frame {
     fn nb_col(&self) -> usize;
     fn nb_row(&self) -> usize;
-    fn idx_iter(&self, skip: usize) -> Box<dyn Iterator<Item = Ty> + '_>;
+    fn idx_iter(&self, skip: usize, take: usize) -> Col;
     fn col_name(&self, idx: usize) -> String;
-    fn col_iter(&self, idx: usize, skip: usize) -> Box<dyn Iterator<Item = Ty> + '_>;
+    fn col_iter(&self, idx: usize, skip: usize, take: usize) -> Col;
 }
 
 impl Frame for DataFrame {
@@ -166,15 +167,19 @@ impl Frame for DataFrame {
         self.num_rows()
     }
 
-    fn idx_iter(&self, skip: usize) -> Box<dyn Iterator<Item = Ty>> {
-        Box::new((skip..self.num_rows()).map(|n| Ty::U(n as u64 + 1)))
+    fn idx_iter(&self, skip: usize, take: usize) -> Col {
+        let mut col = Col::new();
+        for i in skip..skip + take {
+            col.add_nb(i);
+        }
+        col
     }
 
     fn col_name(&self, idx: usize) -> String {
         self.schema().all_fields()[idx].name().clone()
     }
 
-    fn col_iter(&self, idx: usize, skip: usize) -> Box<dyn Iterator<Item = Ty> + '_> {
-        Box::new(self.iter(idx, skip))
+    fn col_iter(&self, idx: usize, skip: usize, take: usize) -> Col {
+        self.iter(idx, skip, take)
     }
 }

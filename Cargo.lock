@@ -294,18 +294,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "6dbe3c979c178231552ecba20214a8272df4e09f232a87aef4320cf06539aded"
 
 [[package]]
-name = "bstr"
-version = "1.5.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a246e68bb43f6cd9db24bea052a53e40405417c5fb372e3d1a8a7f770a564ef5"
-dependencies = [
- "memchr",
- "once_cell",
- "regex-automata",
- "serde",
-]
-
-[[package]]
 name = "bumpalo"
 version = "3.13.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -494,7 +482,6 @@ name = "dtex"
 version = "0.0.0"
 dependencies = [
  "arrow",
- "bstr",
  "clap",
  "lexical-core",
  "libduckdb-sys",

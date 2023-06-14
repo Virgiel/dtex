@@ -1,6 +1,4 @@
-use std::{
-    borrow::Cow, fmt::Write, io, str::FromStr, sync::mpsc::RecvTimeoutError, time::Duration,
-};
+use std::{io, ops::Range, sync::mpsc::RecvTimeoutError, time::Duration};
 
 use arrow::{
     array::{ArrayRef, AsArray, Decimal128Array},
@@ -8,10 +6,10 @@ use arrow::{
         DataType, Float16Type, Float32Type, Float64Type, Int16Type, Int32Type, Int64Type, Int8Type,
         UInt16Type, UInt32Type, UInt64Type, UInt8Type,
     },
+    util::display::{ArrayFormatter, FormatOptions},
 };
-use bstr::{BStr, BString};
 use event::event_listener;
-use fmt::rtrim;
+use fmt::{rtrim, Col};
 use grid::nav::Nav;
 use notify::{RecommendedWatcher, Watcher};
 use notify_debouncer_full::FileIdMap;
@@ -40,7 +38,6 @@ mod spinner;
 mod style;
 mod tab;
 mod task;
-mod utils;
 
 pub fn run(sources: impl Iterator<Item = Source>) {
     let (receiver, watcher, runner) = event_listener();
@@ -221,96 +218,77 @@ pub enum OnKey {
     Continue,
 }
 
-pub enum Ty<'a> {
+pub enum Cell<'a> {
     Null,
     Bool(bool),
-    Str(Cow<'a, BStr>),
-    U(u64),
-    I(i128),
-    F(f64),
-}
-
-impl Ty<'_> {
-    pub fn is_str(&self) -> bool {
-        matches!(self, Ty::Str(_))
-    }
-
-    pub fn fmt(&self, out: &mut String) {
-        match self {
-            Ty::Null => {}
-            Ty::Bool(it) => writeln!(out, "{it}").unwrap(),
-            Ty::Str(it) => writeln!(out, "{it}").unwrap(),
-            Ty::U(it) => writeln!(out, "{it}").unwrap(),
-            Ty::I(it) => writeln!(out, "{it}").unwrap(),
-            Ty::F(it) => writeln!(out, "{it}").unwrap(),
-        }
-    }
-}
-
-impl<'a> From<&'a str> for Ty<'a> {
-    fn from(value: &'a str) -> Self {
-        Self::Str(Cow::Borrowed(value.into()))
-    }
+    Str(&'a str),
+    Dsp(Range<usize>),
+    Nb {
+        range: Range<usize>,
+        lhs: usize,
+        rhs: usize,
+    },
 }
 
 macro_rules! iter {
-    ($m:expr, $map:expr) => {
-        Box::new($m.iter().map(|b| b.map($map).unwrap_or(Ty::Null)))
+    ($array:expr, $col:expr, $skip:expr, $take:expr, $map:ident) => {
+        for v in $array.into_iter().skip($skip).take($take) {
+            match v {
+                Some(v) => $col.$map(v),
+                None => $col.add_null(),
+            }
+        }
     };
-    ($array:expr, $m:ty, $map:expr) => {
-        iter!($array.as_primitive::<$m>(), $map)
-    };
-    ($array:expr, $m:ty, $ty:ident, $native:ty) => {
-        iter!($array, $m, |v| Ty::$ty(v as $native))
+}
+macro_rules! prim {
+    ($array:expr, $col:expr, $skip:expr, $take:expr, $m:ty) => {
+        iter!($array.as_primitive::<$m>(), $col, $skip, $take, add_nb)
     };
 }
 
-fn fmt_list(array: ArrayRef) -> Ty<'static> {
-    let mut out = "[".into();
-    for ty in array_to_iter(&array) {
-        ty.fmt(&mut out);
-        out.push(',');
-    }
-    if out.len() > 1 {
-        out.pop();
-    }
-    out.push_str("]");
-    Ty::Str(Cow::Owned(BString::from(out)))
-}
-
-pub fn array_to_iter(array: &ArrayRef) -> Box<dyn Iterator<Item = Ty<'_>> + '_> {
+pub fn array_to_iter<'a>(array: &'a ArrayRef, stat: &mut Col<'a>, skip: usize, take: usize) {
     #[allow(clippy::unnecessary_cast)]
     match array.data_type() {
-        DataType::Null => Box::new((0..array.len()).map(|_| Ty::Null)),
-        DataType::Boolean => iter!(array.as_boolean(), Ty::Bool),
-        DataType::Int8 => iter!(array, Int8Type, I, i128),
-        DataType::Int16 => iter!(array, Int16Type, I, i128),
-        DataType::Int32 => iter!(array, Int32Type, I, i128),
-        DataType::Int64 => iter!(array, Int64Type, I, i128),
-        DataType::UInt8 => iter!(array, UInt8Type, U, u64),
-        DataType::UInt16 => iter!(array, UInt16Type, U, u64),
-        DataType::UInt32 => iter!(array, UInt32Type, U, u64),
-        DataType::UInt64 => iter!(array, UInt64Type, U, u64),
+        DataType::Null => iter!(
+            (0..array.len()).map(|_| None::<bool>),
+            stat,
+            skip,
+            take,
+            add_bool
+        ),
+        DataType::Boolean => {
+            iter!(array.as_boolean(), stat, skip, take, add_bool)
+        }
+        DataType::Int8 => prim!(array, stat, skip, take, Int8Type),
+        DataType::Int16 => prim!(array, stat, skip, take, Int16Type),
+        DataType::Int32 => prim!(array, stat, skip, take, Int32Type),
+        DataType::Int64 => prim!(array, stat, skip, take, Int64Type),
+        DataType::UInt8 => prim!(array, stat, skip, take, UInt8Type),
+        DataType::UInt16 => prim!(array, stat, skip, take, UInt16Type),
+        DataType::UInt32 => prim!(array, stat, skip, take, UInt32Type),
+        DataType::UInt64 => prim!(array, stat, skip, take, UInt64Type),
         DataType::Float16 => {
-            iter!(array, Float16Type, |v| Ty::F(v.to_f64()))
+            let array = array
+                .as_primitive::<Float16Type>()
+                .into_iter()
+                .map(|f| f.map(|f| f.to_f32()));
+            iter!(array, stat, skip, take, add_nb)
         }
-        DataType::Float32 => iter!(array, Float32Type, F, f64),
-        DataType::Float64 => iter!(array, Float64Type, F, f64),
+        DataType::Float32 => prim!(array, stat, skip, take, Float32Type),
+        DataType::Float64 => prim!(array, stat, skip, take, Float64Type),
         DataType::Utf8 => {
-            iter!(array.as_string::<i32>(), |v| Ty::Str(Cow::Borrowed(
-                v.into()
-            )))
+            iter!(array.as_string::<i32>(), stat, skip, take, add_str)
         }
-        DataType::LargeUtf8 => iter!(array.as_string::<i64>(), |v| Ty::Str(Cow::Borrowed(
-            v.into()
-        ))),
+        DataType::LargeUtf8 => iter!(array.as_string::<i64>(), stat, skip, take, add_str),
         DataType::Decimal128(_, _) => {
             let array: &Decimal128Array = array.as_any().downcast_ref().unwrap();
-            iter!(array, |v| Ty::I(v as i128))
+            iter!(array, stat, skip, take, add_nb)
         }
-        DataType::List(_) => {
-            iter!(array.as_list::<i32>(), |v| fmt_list(v))
+        _ => {
+            let fmt = ArrayFormatter::try_new(array, &FormatOptions::default()).unwrap();
+            for i in (0..array.len()).skip(skip).take(take) {
+                stat.add_dsp(fmt.value(i));
+            }
         }
-        ty => unimplemented!("{ty}"),
     }
 }

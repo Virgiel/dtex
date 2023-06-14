@@ -3,6 +3,7 @@ use std::sync::Arc;
 use crate::{
     duckdb::Connection,
     error::Result,
+    fmt::Col,
     grid::Frame,
     source::{DataFrame, Source},
     task::{DuckTask, Runner},
@@ -58,16 +59,16 @@ impl Frame for Description {
         self.0.num_rows()
     }
 
-    fn idx_iter(&self, skip: usize) -> Box<dyn Iterator<Item = crate::Ty> + '_> {
-        Box::new(self.0.iter(0, skip))
+    fn idx_iter(&self, skip: usize, take: usize) -> Col {
+        self.0.iter(0, skip, take)
     }
 
     fn col_name(&self, idx: usize) -> String {
         self.0.schema().all_fields()[idx + 1].name().clone()
     }
 
-    fn col_iter(&self, idx: usize, skip: usize) -> Box<dyn Iterator<Item = crate::Ty> + '_> {
-        Box::new(self.0.iter(idx + 1, skip))
+    fn col_iter(&self, idx: usize, skip: usize, take: usize) -> Col {
+        self.0.iter(idx + 1, skip, take)
     }
 }
 

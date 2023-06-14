@@ -2,10 +2,10 @@ use reedline::{KeyCode, KeyModifiers};
 use tui::{crossterm::event::KeyEvent, unicode_width::UnicodeWidthStr, Canvas};
 
 use crate::{
-    fmt::{self, rtrim, ColStat},
+    fmt::rtrim,
     style,
     tab::{GridUI, Status},
-    OnKey, Ty,
+    OnKey,
 };
 
 use super::{
@@ -115,19 +115,6 @@ impl FrameGrid {
     }
 
     pub fn draw(&mut self, c: &mut Canvas, df: &dyn Frame) -> GridUI {
-        pub fn size_col<'a>(
-            values: impl Iterator<Item = Ty<'a>>,
-            n: usize,
-        ) -> (Vec<Ty<'a>>, ColStat) {
-            values
-                .take(n)
-                .fold((Vec::new(), ColStat::new()), |(mut vec, mut stat), ty| {
-                    stat.add(&ty);
-                    vec.push(ty);
-                    (vec, stat)
-                })
-        }
-
         let nb_col = df.nb_col();
         let nb_row = df.nb_row();
         self.projection.set_nb_cols(nb_col);
@@ -136,10 +123,10 @@ impl FrameGrid {
         let v_row = c.height() - 1; // header bar
         let row_off = self.nav.row_offset(nb_row, v_row);
         // Nb call necessary to print the biggest index
-        let (ids, mut id_stat) = size_col(df.idx_iter(row_off), v_row);
-        id_stat.align_right();
+        let mut ids_col = df.idx_iter(row_off, v_row);
+        ids_col.align_right();
         // Whole canvas minus index col
-        let mut remaining_width = c.width() - id_stat.budget() - 1;
+        let mut remaining_width = c.width() - ids_col.budget() - 1;
         let mut cols = Vec::new();
         let mut coll_off_iter = self.nav.col_iter(visible_cols);
         // Fill canvas with columns
@@ -147,16 +134,16 @@ impl FrameGrid {
             if let Some(off) = coll_off_iter.next() {
                 let idx = self.projection.project(off);
                 let name = df.col_name(idx);
-                let (fields, stat) = size_col(df.col_iter(idx, row_off), v_row);
-                let size = self.sizer.size(idx, stat.budget(), name.width());
+                let col = df.col_iter(idx, row_off, v_row);
+                let size = self.sizer.size(idx, col.budget(), name.width());
                 let allowed = size.min(remaining_width);
                 remaining_width = remaining_width.saturating_sub(allowed + 1); // +1 for the separator
-                cols.push((off, name, fields, stat, allowed));
+                cols.push((off, name, col, allowed));
             } else {
                 break;
             }
         }
-        cols.sort_unstable_by_key(|(i, _, _, _, _)| *i);
+        cols.sort_unstable_by_key(|(i, _, _, _)| *i);
         drop(coll_off_iter);
 
         let fmt_buf = &mut String::with_capacity(256);
@@ -164,11 +151,11 @@ impl FrameGrid {
         {
             let line = &mut c.top();
             line.draw(
-                format_args!("{:>1$} ", '#', id_stat.budget()),
+                format_args!("{:>1$} ", '#', ids_col.budget()),
                 style::index().bold(),
             );
 
-            for (off, name, _, _, budget) in &cols {
+            for (off, name, _, budget) in &cols {
                 let style = if *off == self.nav.c_col() {
                     style::selected().bold()
                 } else {
@@ -192,22 +179,15 @@ impl FrameGrid {
             };
             let line = &mut c.top();
             line.draw(
-                format_args!(
-                    "{} ",
-                    fmt::fmt_field(fmt_buf, &ids[r], &id_stat, id_stat.budget())
-                ),
+                format_args!("{} ", ids_col.fmt(fmt_buf, r, ids_col.budget())),
                 if current {
                     style::index().bold()
                 } else {
                     style::index()
                 },
             );
-            for (_, _, fields, stat, budget) in &cols {
-                let ty = &fields[r];
-                line.draw(
-                    format_args!("{}", fmt::fmt_field(fmt_buf, ty, stat, *budget)),
-                    style,
-                );
+            for (_, _, col, budget) in &cols {
+                line.draw(format_args!("{}", col.fmt(fmt_buf, r, *budget)), style);
                 line.draw("│", style::separator());
             }
         }

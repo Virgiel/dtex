@@ -17,8 +17,8 @@ use crate::{
     array_to_iter,
     duckdb::{Chunks, Connection},
     error::Result,
+    fmt::Col,
     task::{Ctx, DuckTask, Runner, Task},
-    Ty,
 };
 
 pub struct Pending {
@@ -408,25 +408,20 @@ impl DataFrame {
         Self::default()
     }
 
-    pub fn iter(&self, idx: usize, mut skip: usize) -> impl Iterator<Item = Ty<'_>> + '_ {
-        let pos = self.0.batchs.iter().position(|a| {
-            if a.num_rows() > skip {
-                true
+    pub fn iter(&self, idx: usize, mut skip: usize, mut take: usize) -> Col {
+        let mut col = Col::new();
+        for chunks in &self.0.batchs {
+            if skip > chunks.num_rows() {
+                skip -= chunks.num_rows()
+            } else if take > 0 {
+                array_to_iter(&chunks.columns()[idx], &mut col, skip, take);
+                take = take.saturating_sub(chunks.num_rows() - skip);
+                skip = 0
             } else {
-                skip -= a.num_rows();
-                false
+                break;
             }
-        });
-        let chunks = if let Some(pos) = pos {
-            &self.0.batchs[pos..]
-        } else {
-            &[]
-        };
-
-        chunks
-            .iter()
-            .flat_map(move |c| array_to_iter(&c.columns()[idx]))
-            .skip(skip)
+        }
+        col
     }
 
     pub fn num_rows(&self) -> usize {
