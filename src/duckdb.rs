@@ -6,22 +6,26 @@ use std::{
 };
 
 use arrow::{
-    array::{ArrayData, StructArray},
+    array::{Array, ArrayData, StructArray},
     ffi::{ArrowArray, FFI_ArrowArray, FFI_ArrowSchema},
     record_batch::RecordBatch,
 };
 use libduckdb_sys::{
-    duckdb_arrow_array, duckdb_arrow_schema, duckdb_close, duckdb_connect, duckdb_connection,
-    duckdb_data_chunk, duckdb_database, duckdb_destroy_data_chunk, duckdb_destroy_pending,
-    duckdb_destroy_prepare, duckdb_destroy_result, duckdb_disconnect, duckdb_execute_pending,
-    duckdb_free, duckdb_interrupt, duckdb_open_ext, duckdb_pending_error,
-    duckdb_pending_execute_task, duckdb_pending_prepared_streaming, duckdb_pending_result,
+    duckdb_arrow_array, duckdb_arrow_array_scan, duckdb_arrow_schema, duckdb_arrow_stream,
+    duckdb_close, duckdb_connect, duckdb_connection, duckdb_data_chunk, duckdb_database,
+    duckdb_destroy_data_chunk, duckdb_destroy_pending, duckdb_destroy_prepare,
+    duckdb_destroy_result, duckdb_disconnect, duckdb_execute_pending, duckdb_free,
+    duckdb_interrupt, duckdb_open_ext, duckdb_pending_error, duckdb_pending_execute_task,
+    duckdb_pending_prepared_streaming, duckdb_pending_result,
+    duckdb_pending_state_DUCKDB_PENDING_ERROR,
     duckdb_pending_state_DUCKDB_PENDING_RESULT_NOT_READY,
     duckdb_pending_state_DUCKDB_PENDING_RESULT_READY, duckdb_prepare, duckdb_prepare_error,
     duckdb_prepared_statement, duckdb_query, duckdb_query_progress, duckdb_result,
     duckdb_result_arrow_array, duckdb_result_arrow_schema, duckdb_result_error,
-    duckdb_result_get_chunk, duckdb_result_is_streaming, duckdb_stream_fetch_chunk, DuckDBSuccess, duckdb_pending_state_DUCKDB_PENDING_ERROR,
+    duckdb_result_get_chunk, duckdb_result_is_streaming, duckdb_stream_fetch_chunk, DuckDBSuccess,
 };
+
+use crate::DataFrame;
 
 #[derive(Debug)]
 pub struct Error(String);
@@ -143,7 +147,7 @@ impl Connection {
         unsafe {
             if duckdb_connect(db.db, &mut con) != DuckDBSuccess {
                 duckdb_disconnect(&mut con);
-                return Err(Error("Unkown connect error".into()));
+                return Err(Error("Unknown connect error".into()));
             }
         }
         Ok(Self(Arc::new(Con {
@@ -154,6 +158,33 @@ impl Connection {
 
     pub fn ctx(&self) -> ConnCtx {
         ConnCtx(self.0.clone())
+    }
+
+    pub fn bind(&self, frame: DataFrame) -> Result<()> {
+        let name = CString::new("current").unwrap();
+        assert_eq!(frame.0.batchs.len(), 1, "TODO concat array");
+        let array = &frame.0.batchs[0];
+        let schema = array.schema();
+        let array = StructArray::try_from(array.clone()).unwrap();
+        let schema = FFI_ArrowSchema::try_from(schema.as_ref()).unwrap();
+        let array = FFI_ArrowArray::new(&array.to_data());
+        let schema = Box::leak(Box::new(schema));
+        let array = Box::leak(Box::new(array));
+        let mut it: duckdb_arrow_stream = std::ptr::null_mut();
+        unsafe {
+            if duckdb_arrow_array_scan(
+                self.0.con as *mut _,
+                name.as_ptr(),
+                schema as *mut _ as *mut _,
+                array as *mut _ as *mut _,
+                &mut it as *mut _,
+            ) != DuckDBSuccess
+            {
+                Err(Error("Unknown arrow scan error".into()))
+            } else {
+                Ok(())
+            }
+        }
     }
 
     pub fn execute(&self, query: &str) -> Result<()> {
@@ -206,7 +237,7 @@ impl Connection {
                         duckdb_destroy_pending(&mut pending);
                         return Err(Error(msg));
                     }
-                    state => unreachable!("Unexpected pending result state: {state}")
+                    state => unreachable!("Unexpected pending result state: {state}"),
                 }
             }
 

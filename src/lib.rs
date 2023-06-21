@@ -184,7 +184,7 @@ impl App {
                             // TODO handle more event
                             // TODO perf with many tabs
                             if e.kind.is_modify() {
-                                for path in e.paths {
+                                for path in &e.paths {
                                     if let Some(tab) = self
                                         .tabs
                                         .iter_mut()

@@ -10,8 +10,6 @@ use arrow::{
     datatypes::{Schema, SchemaRef},
     record_batch::RecordBatch,
 };
-use once_cell::sync::OnceCell;
-use tempfile::NamedTempFile;
 
 use crate::{
     array_to_iter,
@@ -216,10 +214,7 @@ impl Loader {
 
 enum Kind {
     Empty,
-    Eager {
-        df: DataFrame,
-        parquet: OnceCell<NamedTempFile>, // TODO remove when using 'arrow_scan'
-    },
+    Eager(DataFrame),
     Sql {
         current: Option<Arc<Source>>,
         sql: String,
@@ -246,14 +241,11 @@ impl Source {
     pub fn from_mem(name: String, df: DataFrame) -> Self {
         Self {
             name,
-            kind: Kind::Eager {
-                parquet: OnceCell::new(),
-                df,
-            },
+            kind: Kind::Eager(df),
         }
     }
 
-    pub fn from_path(path: PathBuf) -> Self {
+    pub fn from_path(path: &Path) -> Self {
         Self {
             name: path
                 .file_stem()
@@ -262,7 +254,7 @@ impl Source {
                 .to_string(),
             kind: Kind::File {
                 display_path: path.to_string_lossy().to_string(),
-                path: path.canonicalize().unwrap_or(path),
+                path: path.canonicalize().unwrap_or(path.to_path_buf()),
             },
         }
     }
@@ -280,12 +272,8 @@ impl Source {
     fn init(&self, con: Connection) -> Result<Connection> {
         Ok(match &self.kind {
             Kind::Empty => con,
-            Kind::Eager { df, parquet } => {
-                let file = parquet.get_or_try_init(|| df.to_parquet())?;
-                con.execute(&format!(
-                    "CREATE VIEW current AS SELECT * FROM read_parquet({:?})",
-                    file.path()
-                ))?;
+            Kind::Eager(df) => {
+                con.bind(df.clone())?;
                 con
             }
             Kind::Sql { current, .. } => match current {
@@ -331,7 +319,7 @@ impl Source {
     fn sync_full(&self) -> Option<DataFrame> {
         match &self.kind {
             Kind::Empty => Some(DataFrame::empty()),
-            Kind::Eager { df, .. } => Some(df.clone()),
+            Kind::Eager(df) => Some(df.clone()),
             Kind::File { .. } | Kind::Sql { .. } => None,
         }
     }
@@ -356,7 +344,7 @@ impl Source {
 }
 
 #[derive(Clone)]
-struct DataFrameImpl {
+pub struct DataFrameImpl {
     schema: SchemaRef,
     pub batchs: Vec<RecordBatch>,
     row_count: usize,
@@ -401,7 +389,7 @@ impl Drop for DataFrameImpl {
 }
 
 #[derive(Clone, Default)]
-pub struct DataFrame(Arc<DataFrameImpl>);
+pub struct DataFrame(pub Arc<DataFrameImpl>);
 
 impl DataFrame {
     pub fn empty() -> Self {
@@ -434,16 +422,6 @@ impl DataFrame {
 
     pub fn schema(&self) -> &SchemaRef {
         &self.0.schema
-    }
-
-    pub fn to_parquet(&self) -> Result<NamedTempFile> {
-        let mut tmp = NamedTempFile::new()?;
-        let mut w = parquet::arrow::ArrowWriter::try_new(&mut tmp, self.0.schema.clone(), None)?;
-        for batch in &self.0.batchs {
-            w.write(batch)?;
-        }
-        w.close()?;
-        Ok(tmp)
     }
 
     pub fn concat(&self, iter: impl Iterator<Item = RecordBatch>) -> Self {

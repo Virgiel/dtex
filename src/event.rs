@@ -11,7 +11,7 @@ use crate::task::Runner;
 
 pub enum Event {
     Term(tui::crossterm::event::Event),
-    FS(Result<Vec<notify::Event>, Vec<notify::Error>>),
+    FS(Result<Vec<notify_debouncer_full::DebouncedEvent>, Vec<notify::Error>>),
     Task,
 }
 
