@@ -28,7 +28,7 @@ libduckdb-sys = { git = "https://github.com/Virgiel/duckdb-rs-tmp", features = [
     "parquet",
     "json",
 ] }
-arrow = { version = "42.0.0", features = ["ffi"], default-features = false }
+arrow = { git = "https://github.com/Virgiel/arrow-rs", features = ["ffi"], default-features = false }
 
 [workspace]
 members = ["py-dtex"]

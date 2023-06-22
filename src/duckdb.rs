@@ -12,11 +12,10 @@ use arrow::{
 };
 use libduckdb_sys::{
     duckdb_arrow_array, duckdb_arrow_array_scan, duckdb_arrow_schema, duckdb_arrow_stream,
-    duckdb_close, duckdb_connect, duckdb_connection, duckdb_data_chunk, duckdb_database,
-    duckdb_destroy_data_chunk, duckdb_destroy_pending, duckdb_destroy_prepare,
-    duckdb_destroy_result, duckdb_disconnect, duckdb_execute_pending, duckdb_free,
-    duckdb_interrupt, duckdb_open_ext, duckdb_pending_error, duckdb_pending_execute_task,
-    duckdb_pending_prepared_streaming, duckdb_pending_result,
+    duckdb_close, duckdb_connect, duckdb_connection, duckdb_database, duckdb_destroy_data_chunk,
+    duckdb_destroy_pending, duckdb_destroy_prepare, duckdb_destroy_result, duckdb_disconnect,
+    duckdb_execute_pending, duckdb_free, duckdb_interrupt, duckdb_open_ext, duckdb_pending_error,
+    duckdb_pending_execute_task, duckdb_pending_prepared_streaming, duckdb_pending_result,
     duckdb_pending_state_DUCKDB_PENDING_ERROR,
     duckdb_pending_state_DUCKDB_PENDING_RESULT_NOT_READY,
     duckdb_pending_state_DUCKDB_PENDING_RESULT_READY, duckdb_prepare, duckdb_prepare_error,
@@ -73,7 +72,26 @@ impl Drop for DB {
 pub struct Chunks {
     _handle: Arc<Con>,
     result: duckdb_result,
+    schema: Arc<FFI_ArrowSchema>,
     idx: u64,
+}
+
+impl Chunks {
+    fn new(_handle: Arc<Con>, result: duckdb_result) -> Self {
+        let mut schema = FFI_ArrowSchema::empty();
+        unsafe {
+            duckdb_result_arrow_schema(
+                result,
+                &mut std::ptr::addr_of_mut!(schema) as *mut _ as *mut duckdb_arrow_schema,
+            );
+        }
+        Self {
+            _handle,
+            result,
+            schema: Arc::new(schema),
+            idx: 0,
+        }
+    }
 }
 
 unsafe impl Send for Chunks {}
@@ -98,7 +116,17 @@ impl Iterator for Chunks {
                 }
                 return None;
             }
-            let new = data_chunk_to_arrow(self.result, chunk);
+            let mut array = FFI_ArrowArray::empty();
+            duckdb_result_arrow_array(
+                self.result,
+                chunk,
+                &mut std::ptr::addr_of_mut!(array) as *mut _ as *mut duckdb_arrow_array,
+            );
+
+            let array_data =
+                ArrayData::try_from(ArrowArray::new(array, self.schema.clone())).unwrap();
+            let struct_array = StructArray::from(array_data);
+            let new = RecordBatch::from(struct_array);
             duckdb_destroy_data_chunk(&mut chunk);
             Some(Ok(new))
         }
@@ -250,30 +278,7 @@ impl Connection {
             }
             duckdb_destroy_pending(&mut pending);
 
-            Ok(Chunks {
-                _handle: self.0.clone(),
-                result: result.assume_init(),
-                idx: 0,
-            })
+            Ok(Chunks::new(self.0.clone(), result.assume_init()))
         }
     }
-}
-
-unsafe fn data_chunk_to_arrow(result: duckdb_result, chunk: duckdb_data_chunk) -> RecordBatch {
-    let mut schema = FFI_ArrowSchema::empty();
-    duckdb_result_arrow_schema(
-        result,
-        &mut std::ptr::addr_of_mut!(schema) as *mut _ as *mut duckdb_arrow_schema,
-    );
-    let mut arrays = FFI_ArrowArray::empty();
-    duckdb_result_arrow_array(
-        result,
-        chunk,
-        &mut std::ptr::addr_of_mut!(arrays) as *mut _ as *mut duckdb_arrow_array,
-    );
-
-    let arrow_array = ArrowArray::new(arrays, schema);
-    let array_data = ArrayData::try_from(arrow_array).unwrap();
-    let struct_array = StructArray::from(array_data);
-    RecordBatch::from(struct_array)
 }
