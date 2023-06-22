@@ -95,6 +95,11 @@ impl<S, T> Ctx<S, T> {
         let mut lock = self.inner.lock.lock().unwrap();
         update(&mut lock);
         drop(lock);
+    }
+}
+
+impl<S, T> Drop for Ctx<S, T> {
+    fn drop(&mut self) {
         self.wake.unpark();
     }
 }

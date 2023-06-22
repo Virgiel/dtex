@@ -99,7 +99,7 @@ impl FrameSource {
                 // Update goal
                 task.state().store(goal, Ordering::Relaxed);
                 // Wake worker if it need to start/stop working
-                if prev > df.num_rows() || goal > df.num_rows() || true {
+                if prev > df.num_rows() || goal > df.num_rows() {
                     task.wake();
                 }
             }
@@ -127,7 +127,6 @@ impl FrameSource {
 }
 
 fn worker(ctx: Ctx<AtomicUsize, Pending>, mut loaded: usize, mut chunks: Chunks) {
-    let mut buff = Vec::with_capacity(50);
     loop {
         while loaded < ctx.state().load(Ordering::Relaxed) {
             if ctx.canceled() {
@@ -136,30 +135,20 @@ fn worker(ctx: Ctx<AtomicUsize, Pending>, mut loaded: usize, mut chunks: Chunks)
             match chunks.next() {
                 Some(Ok(batch)) => {
                     loaded += batch.num_rows();
-                    buff.push(batch);
-                    if buff.len() == buff.capacity() {
-                        ctx.lock(|p| p.batches.append(&mut buff))
-                    }
+                    ctx.lock(|p| p.batches.push(batch))
                 }
                 Some(Err(err)) => {
                     ctx.lock(|p| p.error = Some(err.to_string()));
                     return;
                 }
                 None => {
-                    ctx.lock(|p| {
-                        p.batches.append(&mut buff);
-                        p.full = true;
-                    });
+                    ctx.lock(|p| p.full = true);
                     return;
                 }
             }
         }
         if ctx.canceled() {
             return;
-        }
-
-        if !buff.is_empty() {
-            ctx.lock(|p| p.batches.append(&mut buff))
         }
         std::thread::park();
     }

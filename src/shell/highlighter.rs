@@ -40,9 +40,9 @@ impl Highlighter {
                     }
                     Token::Word(mut w) => {
                         w.value.make_ascii_lowercase();
-                        if w.value == "current" {
-                            none().fg(Color::Cyan)
-                        } else if DUCKDB_FUNCTIONS.binary_search(&w.value.as_str()).is_ok() {
+                        if w.value == "current"
+                            || DUCKDB_FUNCTIONS.binary_search(&w.value.as_str()).is_ok()
+                        {
                             none().fg(Color::Cyan)
                         } else if DUCKDB_KEYWORDS.binary_search(&w.value.as_str()).is_ok() {
                             none().fg(Color::DarkBlue)

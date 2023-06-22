@@ -1,6 +1,6 @@
 use std::time::{Duration, Instant};
 
-const SPINNER_DELAY: Duration = Duration::from_millis(250);
+const SPINNER_DELAY: Duration = Duration::from_millis(200);
 pub const SPINNER_TICK: u128 = 100;
 const SPINNERS_UNICODE: [char; 10] = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'];
 
@@ -23,8 +23,8 @@ impl Spinner {
             let elapsed = start.elapsed();
             // Wait for some frame to prevent flashing
             if elapsed > SPINNER_DELAY {
-                let tick =
-                    ((elapsed - SPINNER_DELAY).as_millis() / SPINNER_TICK) as usize % SPINNERS_UNICODE.len();
+                let tick = ((elapsed - SPINNER_DELAY).as_millis() / SPINNER_TICK) as usize
+                    % SPINNERS_UNICODE.len();
                 return Some(SPINNERS_UNICODE[tick]);
             }
         }

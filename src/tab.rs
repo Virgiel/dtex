@@ -74,7 +74,7 @@ impl Tab {
             if let Some(c) = self.spinner.state(true) {
                 l.rdraw(format_args!("{c}"), style::progress());
                 if progress > 0. {
-                    l.rdraw(format_args!(" {progress:<2.0}%"), style::progress());
+                    l.rdraw(format_args!(" {progress:>2.0}%"), style::progress());
                 }
                 l.rdraw(format_args!(" {task}"), style::progress());
                 task_progress = true;

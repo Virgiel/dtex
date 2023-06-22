@@ -23,10 +23,7 @@ impl Navigator {
     }
 
     pub fn activate(code: &KeyCode) -> bool {
-        match code {
-            KeyCode::Char(c) if c.is_ascii_digit() => true,
-            _ => false,
-        }
+        matches!(code, KeyCode::Char(c) if c.is_ascii_digit())
     }
 
     pub fn on_key(&mut self, code: KeyCode) -> Result<Nav, Nav> {
@@ -43,10 +40,12 @@ impl Navigator {
             KeyCode::Down => self.prompt.exec(PromptCmd::Next),
             KeyCode::Backspace => {
                 self.prompt.exec(PromptCmd::Delete);
+                if let Ok(row) = self.prompt.state().0.parse::<usize>() {
+                    self.curr.go_to((row, self.curr.c_col()));
+                }
             }
-            KeyCode::Esc => {
-                return Err(self.prev.clone());
-            }
+            KeyCode::Esc => return Err(self.prev.clone()),
+            KeyCode::Enter => return Err(self.curr.clone()),
             _ => {}
         }
 

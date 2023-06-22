@@ -1,5 +1,5 @@
 use std::{
-    sync::mpsc::{sync_channel, Receiver},
+    sync::mpsc::{sync_channel, Receiver, TrySendError},
     thread::Builder,
     time::Duration,
 };
@@ -29,8 +29,17 @@ pub fn event_listener() -> (
             .name("task_listener".into())
             .spawn(move || loop {
                 std::thread::park();
-                // No need to insist if there is already other event in the queue
-                sender.try_send(Event::Task).ok();
+
+                if let Err(e) = sender.try_send(Event::Task) {
+                    match e {
+                        TrySendError::Full(_) => {
+                            // No need to insist if there is already other event in the queue
+                        }
+                        TrySendError::Disconnected(_) => {
+                            return; // Graceful shutdown
+                        }
+                    }
+                }
             })
             .expect("Failed to start task_listener thread")
             .thread()
@@ -48,9 +57,9 @@ pub fn event_listener() -> (
             .spawn(move || loop {
                 match rx.recv() {
                     Ok(event) => {
-                        sender
-                            .send(Event::FS(event))
-                            .expect("Failed to file terminal event");
+                        if sender.send(Event::FS(event)).is_err() {
+                            return; // Graceful shutdown
+                        }
                     }
                     Err(err) => panic!("{err}"),
                 }
@@ -64,9 +73,9 @@ pub fn event_listener() -> (
         .spawn(move || loop {
             match tui::crossterm::event::read() {
                 Ok(event) => {
-                    sender
-                        .send(Event::Term(event))
-                        .expect("Failed to send terminal event");
+                    if sender.send(Event::Term(event)).is_err() {
+                        return; // Graceful shutdown
+                    }
                 }
                 Err(err) => panic!("{err}"),
             }

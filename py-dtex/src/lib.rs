@@ -1,4 +1,7 @@
-use std::{ptr::addr_of_mut, sync::OnceLock};
+use std::{
+    ptr::addr_of_mut,
+    sync::{Arc, OnceLock},
+};
 
 use ::dtex::{
     arrow::{
@@ -44,12 +47,9 @@ impl Extractor {
     }
 
     fn extract_py_arrow(obj: &PyAny) -> PyResult<ArrayRef> {
-        // prepare a pointer to receive the Array struct
         let mut array = FFI_ArrowArray::empty();
         let mut schema = FFI_ArrowSchema::empty();
 
-        // make the conversion through PyArrow's private API
-        // this changes the pointer's memory and is thus unsafe. In particular, `_export_to_c` can go out of bounds
         obj.call_method1(
             "_export_to_c",
             (
@@ -58,7 +58,7 @@ impl Extractor {
             ),
         )?;
 
-        let data = ArrowArray::new(array, schema).to_data().unwrap();
+        let data = ArrowArray::new(array, Arc::new(schema)).to_data().unwrap();
         let array = make_array(data);
         Ok(array)
     }
