@@ -61,7 +61,9 @@ pub fn event_listener() -> (
                             return; // Graceful shutdown
                         }
                     }
-                    Err(err) => panic!("{err}"),
+                    Err(_) => {
+                        return; // Graceful shutdown
+                    }
                 }
             })
             .expect("Failed to start fs_listener thread");

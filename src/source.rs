@@ -150,7 +150,7 @@ fn worker(ctx: Ctx<AtomicUsize, Pending>, mut loaded: usize, mut chunks: Chunks)
         if ctx.canceled() {
             return;
         }
-        std::thread::park();
+        ctx.wait();
     }
 }
 

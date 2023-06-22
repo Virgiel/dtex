@@ -96,6 +96,11 @@ impl<S, T> Ctx<S, T> {
         update(&mut lock);
         drop(lock);
     }
+
+    pub fn wait(&self) {
+        std::thread::park();
+        self.wake.unpark();
+    }
 }
 
 impl<S, T> Drop for Ctx<S, T> {

@@ -1,4 +1,4 @@
-use reedline::{KeyCode, KeyModifiers};
+use reedline::{KeyCode as Key, KeyModifiers};
 use tui::{crossterm::event::KeyEvent, unicode_width::UnicodeWidthStr, Canvas};
 
 use crate::{
@@ -41,74 +41,74 @@ impl FrameGrid {
     pub fn on_key(&mut self, event: &KeyEvent) -> OnKey {
         let shift = event.modifiers.contains(KeyModifiers::SHIFT);
         let idx = self.nav.c_col();
+        let proj_idx = self.projection.project(idx);
         match self.state {
             State::Normal => match event.code {
-                KeyCode::Char('s') => {
-                    self.state = State::Size;
-                }
-                KeyCode::Char('p') => {
-                    self.state = State::Projection;
-                }
-                KeyCode::Char('g') => self.nav.top(),
-                KeyCode::Char('G') => self.nav.btm(),
-                KeyCode::Left | KeyCode::Char('H') if shift => self.nav.win_left(),
-                KeyCode::Down | KeyCode::Char('J') if shift => self.nav.win_down(),
-                KeyCode::Up | KeyCode::Char('K') if shift => self.nav.win_up(),
-                KeyCode::Right | KeyCode::Char('L') if shift => self.nav.win_right(),
-                KeyCode::Left | KeyCode::Char('h') => self.nav.left(),
-                KeyCode::Down | KeyCode::Char('j') => self.nav.down(),
-                KeyCode::Up | KeyCode::Char('k') => self.nav.up(),
-                KeyCode::Right | KeyCode::Char('l') => self.nav.right(),
-                KeyCode::Char('q') => return OnKey::Quit,
+                Key::Char('s') => self.state = State::Size,
+                Key::Char('p') => self.state = State::Projection,
+                Key::Char('g') => self.nav.top(),
+                Key::Char('G') => self.nav.btm(),
+                Key::Left | Key::Char('H') if shift => self.nav.win_left(),
+                Key::Down | Key::Char('J') if shift => self.nav.win_down(),
+                Key::Up | Key::Char('K') if shift => self.nav.win_up(),
+                Key::Right | Key::Char('L') if shift => self.nav.win_right(),
+                Key::Left | Key::Char('h') => self.nav.left(),
+                Key::Down | Key::Char('j') => self.nav.down(),
+                Key::Up | Key::Char('k') => self.nav.up(),
+                Key::Right | Key::Char('l') => self.nav.right(),
+                Key::Char('q') => return OnKey::Quit,
                 _ => return OnKey::Pass,
             },
             State::Projection => match event.code {
-                KeyCode::Left | KeyCode::Char('H') if shift => {
+                Key::Esc | Key::Char('q') | Key::Char('p') => self.state = State::Normal,
+                Key::Left | Key::Char('h') => {
                     self.projection.cmd(idx, projection::Cmd::Left);
                     self.nav.left()
                 }
-                KeyCode::Down | KeyCode::Char('J') if shift => {
-                    self.projection.cmd(idx, projection::Cmd::Hide);
-                }
-                KeyCode::Up | KeyCode::Char('K') if shift => {
-                    self.projection.reset() // TODO keep column focus
-                }
-                KeyCode::Right | KeyCode::Char('L') if shift => {
+                Key::Right | Key::Char('l') => {
                     self.projection.cmd(idx, projection::Cmd::Right);
                     self.nav.right();
                 }
-                KeyCode::Esc | KeyCode::Char('q') => self.state = State::Normal,
-                KeyCode::Left | KeyCode::Char('h') => self.nav.left(),
-                KeyCode::Down | KeyCode::Char('j') => self.nav.down(),
-                KeyCode::Up | KeyCode::Char('k') => self.nav.up(),
-                KeyCode::Right | KeyCode::Char('l') => self.nav.right(),
+                Key::Down | Key::Char('j') => {
+                    self.projection.cmd(idx, projection::Cmd::Hide);
+                    self.state = State::Normal
+                }
+                Key::Up | Key::Char('k') => {
+                    self.projection.reset(); // TODO keep column focus
+                    self.state = State::Normal
+                }
                 _ => {}
             },
-            State::Size => {
-                let mut reset = true;
-                match event.code {
-                    KeyCode::Esc | KeyCode::Char('q') => self.state = State::Normal,
-                    KeyCode::Char('r') => self.sizer.reset(),
-                    KeyCode::Char('f') => self.sizer.fit(),
-                    KeyCode::Char(' ') => self.sizer.toggle(),
-                    KeyCode::Left | KeyCode::Char('h') => {
-                        self.sizer.cmd(idx, sizer::Cmd::Less);
-                        reset = false;
-                    }
-                    KeyCode::Down | KeyCode::Char('j') => {
-                        self.sizer.cmd(idx, sizer::Cmd::Constrain)
-                    }
-                    KeyCode::Up | KeyCode::Char('k') => self.sizer.cmd(idx, sizer::Cmd::Free),
-                    KeyCode::Right | KeyCode::Char('l') => {
-                        self.sizer.cmd(idx, sizer::Cmd::More);
-                        reset = false;
-                    }
-                    _ => reset = false,
-                }
-                if reset {
+            State::Size => match event.code {
+                Key::Esc | Key::Char('q') | Key::Char('s') => self.state = State::Normal,
+                Key::Char('r') => {
+                    self.sizer.reset();
                     self.state = State::Normal;
                 }
-            }
+                Key::Char('f') => {
+                    self.sizer.fit();
+                    self.state = State::Normal;
+                }
+                Key::Char(' ') => {
+                    self.sizer.toggle();
+                    self.state = State::Normal;
+                }
+                Key::Left | Key::Char('h') => {
+                    self.sizer.cmd(proj_idx, sizer::Cmd::Less);
+                }
+                Key::Down | Key::Char('j') => {
+                    self.sizer.cmd(proj_idx, sizer::Cmd::Constrain);
+                    self.state = State::Normal;
+                }
+                Key::Up | Key::Char('k') => {
+                    self.sizer.cmd(proj_idx, sizer::Cmd::Free);
+                    self.state = State::Normal;
+                }
+                Key::Right | Key::Char('l') => {
+                    self.sizer.cmd(proj_idx, sizer::Cmd::More);
+                }
+                _ => {}
+            },
         };
 
         OnKey::Continue
@@ -193,7 +193,8 @@ impl FrameGrid {
         }
 
         GridUI {
-            col_name: (self.projection.nb_cols() > 0).then(|| df.col_name(self.nav.c_col())),
+            col_name: (self.projection.nb_cols() > 0)
+                .then(|| df.col_name(self.projection.project(self.nav.c_col()))),
             progress: ((self.nav.c_row() + 1) * 100) / nb_row.max(1),
             streaming: true,
             status: match self.state {
