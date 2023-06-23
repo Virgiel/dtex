@@ -6,16 +6,24 @@ pub enum Cmd {
     More,
 }
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy)]
 enum Constraint {
-    Limit,
     Fit,
+    Fill,
     Fixe(usize),
 }
 
-/// Size column based on previous observed length and constraints  
+#[derive(Clone, Copy)]
+struct SizeStat {
+    content: usize,
+    header: usize,
+    size: usize,
+}
+
+/// Size column based on previous observed length and constraints
+/// Prevent column size from flickering on scroll and use all available space
 pub struct Sizer {
-    cols: Vec<(usize, usize, Constraint)>,
+    cols: Vec<(SizeStat, Constraint)>,
     fit_content: bool,
 }
 
@@ -27,26 +35,52 @@ impl Sizer {
         }
     }
 
-    /// Size a column
-    pub fn size(&mut self, idx: usize, len: usize, header_len: usize) -> usize {
+    /// Size a column taking minimal amount of space
+    pub fn fit(&mut self, idx: usize, len: usize, header_len: usize) -> usize {
         // Ensure we store info for this column
         if idx >= self.cols.len() {
-            self.cols.resize(idx + 1, (0, 0, Constraint::Limit));
+            self.cols.resize(
+                idx + 1,
+                (
+                    SizeStat {
+                        content: 0,
+                        header: 0,
+                        size: 0,
+                    },
+                    Constraint::Fit,
+                ),
+            );
         }
         // Sync max len
-        self.cols[idx].0 = self.cols[idx].0.max(len);
-        self.cols[idx].1 = self.cols[idx].1.max(header_len);
+        self.cols[idx].0.content = self.cols[idx].0.content.max(len);
+        self.cols[idx].0.header = self.cols[idx].0.header.max(header_len);
 
-        self.get_size(idx)
+        let size = self.get_size(idx, false);
+        self.cols[idx].0.size = size;
+        size
+    }
+
+    /// Size a column taking maximal amount of space
+    pub fn fill(&mut self, idx: usize, available: &mut usize) -> usize {
+        let fill_size = self.get_size(idx, true);
+        let mut size = self.cols[idx].0.size;
+        let missing = fill_size.saturating_sub(size);
+        if missing > 0 {
+            size += missing.min(*available);
+            self.cols[idx].0.size = size;
+            *available = available.saturating_sub(missing);
+        }
+        size
     }
 
     /// Size the column based on its constraint
-    fn get_size(&self, idx: usize) -> usize {
-        let (content, header, constraint) = self.cols[idx];
+    fn get_size(&self, idx: usize, fill: bool) -> usize {
+        let (stat, constraint) = self.cols[idx];
+        let max = if fill { usize::MAX } else { 25 };
         match constraint {
-            Constraint::Limit if self.fit_content => content.min(25),
-            Constraint::Limit => header.max(content).min(25),
-            Constraint::Fit => content,
+            Constraint::Fit if self.fit_content => stat.content.min(max),
+            Constraint::Fit => stat.header.max(stat.content).min(max),
+            Constraint::Fill => stat.header.max(stat.content),
             Constraint::Fixe(size) => size,
         }
         .max(self.min_size(idx))
@@ -54,8 +88,8 @@ impl Sizer {
 
     /// Required size to display a column
     fn min_size(&self, idx: usize) -> usize {
-        let (content, header, _) = self.cols[idx];
-        content.max(header).min(5)
+        let (stat, _) = self.cols[idx];
+        stat.content.max(stat.header).min(5)
     }
 
     /// Apply command
@@ -63,13 +97,17 @@ impl Sizer {
         if idx >= self.cols.len() {
             return;
         }
-        self.cols[idx].2 = match cmd {
-            Cmd::Constrain => Constraint::Limit,
-            Cmd::Free => Constraint::Fit,
-            Cmd::Less => {
-                Constraint::Fixe(self.get_size(idx).saturating_sub(1).max(self.min_size(idx)))
-            }
-            Cmd::More => Constraint::Fixe(self.get_size(idx).saturating_add(1)),
+        self.cols[idx].1 = match cmd {
+            Cmd::Constrain => Constraint::Fit,
+            Cmd::Free => Constraint::Fill,
+            Cmd::Less => Constraint::Fixe(
+                self.cols[idx]
+                    .0
+                    .size
+                    .saturating_sub(1)
+                    .max(self.min_size(idx)),
+            ),
+            Cmd::More => Constraint::Fixe(self.cols[idx].0.size.saturating_add(1)),
         };
     }
 
@@ -84,9 +122,9 @@ impl Sizer {
     }
 
     /// Reset all columns observed max size
-    pub fn fit(&mut self) {
-        for (max, _, _) in &mut self.cols {
-            *max = 0;
+    pub fn fit_current_size(&mut self) {
+        for (stat, _) in &mut self.cols {
+            stat.content = 0;
         }
     }
 }

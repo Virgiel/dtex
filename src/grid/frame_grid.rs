@@ -86,7 +86,7 @@ impl FrameGrid {
                     self.state = State::Normal;
                 }
                 Key::Char('f') => {
-                    self.sizer.fit();
+                    self.sizer.fit_current_size();
                     self.state = State::Normal;
                 }
                 Key::Char(' ') => {
@@ -135,14 +135,24 @@ impl FrameGrid {
                 let idx = self.projection.project(off);
                 let name = df.col_name(idx);
                 let col = df.col_iter(idx, row_off, v_row);
-                let size = self.sizer.size(idx, col.budget(), name.width());
+                let size = self.sizer.fit(idx, col.budget(), name.width());
                 let allowed = size.min(remaining_width);
-                remaining_width = remaining_width.saturating_sub(allowed + 1); // +1 for the separator
                 cols.push((off, name, col, allowed));
+                let separator = if cols.len() == nb_col { 0 } else { 1 }; // Skip last separator
+                remaining_width = remaining_width.saturating_sub(allowed + separator);
             } else {
                 break;
             }
         }
+        // Redistribute remaining width
+        for (off, _, _, allowed) in &mut cols {
+            if remaining_width == 0 {
+                break;
+            }
+            let idx = self.projection.project(*off);
+            *allowed = self.sizer.fill(idx, &mut remaining_width);
+        }
+
         cols.sort_unstable_by_key(|(i, _, _, _)| *i);
         drop(coll_off_iter);
 
