@@ -23,12 +23,14 @@ notify = "6.0.0"
 notify-debouncer-full = "0.2.0"
 # Sql parser
 sqlparser = "0.34.0"
-# Data frame engine
+arrow = { git = "https://github.com/Virgiel/arrow-rs", branch = "clean-ffi", features = [
+    "ffi",
+], default-features = false }
 libduckdb-sys = { git = "https://github.com/Virgiel/duckdb-rs-tmp", features = [
     "parquet",
     "json",
 ] }
-arrow = { git = "https://github.com/Virgiel/arrow-rs", features = ["ffi"], default-features = false }
 
+# Data frame engine
 [workspace]
 members = ["py-dtex"]

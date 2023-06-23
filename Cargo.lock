@@ -103,7 +103,7 @@ checksum = "23b62fc65de8e4e7f52534fb52b0f3ed04746ae267519eef2a83941e8085068b"
 [[package]]
 name = "arrow"
 version = "42.0.0"
-source = "git+https://github.com/Virgiel/arrow-rs#edc7dcd2f952249dc470536ff3d9c1c7eeaf238a"
+source = "git+https://github.com/Virgiel/arrow-rs?branch=clean-ffi#7a76e75c0752b0cbc7f7f72223133bf61046726e"
 dependencies = [
  "ahash",
  "arrow-arith",
@@ -121,7 +121,7 @@ dependencies = [
 [[package]]
 name = "arrow-arith"
 version = "42.0.0"
-source = "git+https://github.com/Virgiel/arrow-rs#edc7dcd2f952249dc470536ff3d9c1c7eeaf238a"
+source = "git+https://github.com/Virgiel/arrow-rs?branch=clean-ffi#7a76e75c0752b0cbc7f7f72223133bf61046726e"
 dependencies = [
  "arrow-array",
  "arrow-buffer",
@@ -135,7 +135,7 @@ dependencies = [
 [[package]]
 name = "arrow-array"
 version = "42.0.0"
-source = "git+https://github.com/Virgiel/arrow-rs#edc7dcd2f952249dc470536ff3d9c1c7eeaf238a"
+source = "git+https://github.com/Virgiel/arrow-rs?branch=clean-ffi#7a76e75c0752b0cbc7f7f72223133bf61046726e"
 dependencies = [
  "ahash",
  "arrow-buffer",
@@ -150,7 +150,7 @@ dependencies = [
 [[package]]
 name = "arrow-buffer"
 version = "42.0.0"
-source = "git+https://github.com/Virgiel/arrow-rs#edc7dcd2f952249dc470536ff3d9c1c7eeaf238a"
+source = "git+https://github.com/Virgiel/arrow-rs?branch=clean-ffi#7a76e75c0752b0cbc7f7f72223133bf61046726e"
 dependencies = [
  "half",
  "num",
@@ -159,7 +159,7 @@ dependencies = [
 [[package]]
 name = "arrow-cast"
 version = "42.0.0"
-source = "git+https://github.com/Virgiel/arrow-rs#edc7dcd2f952249dc470536ff3d9c1c7eeaf238a"
+source = "git+https://github.com/Virgiel/arrow-rs?branch=clean-ffi#7a76e75c0752b0cbc7f7f72223133bf61046726e"
 dependencies = [
  "arrow-array",
  "arrow-buffer",
@@ -175,7 +175,7 @@ dependencies = [
 [[package]]
 name = "arrow-data"
 version = "42.0.0"
-source = "git+https://github.com/Virgiel/arrow-rs#edc7dcd2f952249dc470536ff3d9c1c7eeaf238a"
+source = "git+https://github.com/Virgiel/arrow-rs?branch=clean-ffi#7a76e75c0752b0cbc7f7f72223133bf61046726e"
 dependencies = [
  "arrow-buffer",
  "arrow-schema",
@@ -186,7 +186,7 @@ dependencies = [
 [[package]]
 name = "arrow-ord"
 version = "42.0.0"
-source = "git+https://github.com/Virgiel/arrow-rs#edc7dcd2f952249dc470536ff3d9c1c7eeaf238a"
+source = "git+https://github.com/Virgiel/arrow-rs?branch=clean-ffi#7a76e75c0752b0cbc7f7f72223133bf61046726e"
 dependencies = [
  "arrow-array",
  "arrow-buffer",
@@ -200,7 +200,7 @@ dependencies = [
 [[package]]
 name = "arrow-row"
 version = "42.0.0"
-source = "git+https://github.com/Virgiel/arrow-rs#edc7dcd2f952249dc470536ff3d9c1c7eeaf238a"
+source = "git+https://github.com/Virgiel/arrow-rs?branch=clean-ffi#7a76e75c0752b0cbc7f7f72223133bf61046726e"
 dependencies = [
  "ahash",
  "arrow-array",
@@ -214,7 +214,7 @@ dependencies = [
 [[package]]
 name = "arrow-schema"
 version = "42.0.0"
-source = "git+https://github.com/Virgiel/arrow-rs#edc7dcd2f952249dc470536ff3d9c1c7eeaf238a"
+source = "git+https://github.com/Virgiel/arrow-rs?branch=clean-ffi#7a76e75c0752b0cbc7f7f72223133bf61046726e"
 dependencies = [
  "bitflags 2.3.2",
 ]
@@ -222,7 +222,7 @@ dependencies = [
 [[package]]
 name = "arrow-select"
 version = "42.0.0"
-source = "git+https://github.com/Virgiel/arrow-rs#edc7dcd2f952249dc470536ff3d9c1c7eeaf238a"
+source = "git+https://github.com/Virgiel/arrow-rs?branch=clean-ffi#7a76e75c0752b0cbc7f7f72223133bf61046726e"
 dependencies = [
  "arrow-array",
  "arrow-buffer",
@@ -234,7 +234,7 @@ dependencies = [
 [[package]]
 name = "arrow-string"
 version = "42.0.0"
-source = "git+https://github.com/Virgiel/arrow-rs#edc7dcd2f952249dc470536ff3d9c1c7eeaf238a"
+source = "git+https://github.com/Virgiel/arrow-rs?branch=clean-ffi#7a76e75c0752b0cbc7f7f72223133bf61046726e"
 dependencies = [
  "arrow-array",
  "arrow-buffer",

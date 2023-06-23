@@ -1,12 +1,9 @@
-use std::{
-    ptr::addr_of_mut,
-    sync::{Arc, OnceLock},
-};
+use std::{ptr::addr_of_mut, sync::OnceLock};
 
 use ::dtex::{
     arrow::{
         array::{make_array, ArrayRef, AsArray},
-        ffi::{ArrowArray, ArrowArrayRef, FFI_ArrowArray, FFI_ArrowSchema},
+        ffi::{from_ffi, FFI_ArrowArray, FFI_ArrowSchema},
         record_batch::RecordBatch,
     },
     DataFrame,
@@ -58,7 +55,7 @@ impl Extractor {
             ),
         )?;
 
-        let data = ArrowArray::new(array, Arc::new(schema)).to_data().unwrap();
+        let data = from_ffi(array, &schema).unwrap();
         let array = make_array(data);
         Ok(array)
     }

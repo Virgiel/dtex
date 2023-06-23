@@ -6,8 +6,8 @@ use std::{
 };
 
 use arrow::{
-    array::{Array, ArrayData, StructArray},
-    ffi::{ArrowArray, FFI_ArrowArray, FFI_ArrowSchema},
+    array::{Array, StructArray},
+    ffi::{from_ffi, FFI_ArrowArray, FFI_ArrowSchema},
     record_batch::RecordBatch,
 };
 use libduckdb_sys::{
@@ -72,7 +72,7 @@ impl Drop for DB {
 pub struct Chunks {
     _handle: Arc<Con>,
     result: duckdb_result,
-    schema: Arc<FFI_ArrowSchema>,
+    schema: FFI_ArrowSchema,
     idx: u64,
 }
 
@@ -88,7 +88,7 @@ impl Chunks {
         Self {
             _handle,
             result,
-            schema: Arc::new(schema),
+            schema,
             idx: 0,
         }
     }
@@ -123,8 +123,7 @@ impl Iterator for Chunks {
                 &mut std::ptr::addr_of_mut!(array) as *mut _ as *mut duckdb_arrow_array,
             );
 
-            let array_data =
-                ArrayData::try_from(ArrowArray::new(array, self.schema.clone())).unwrap();
+            let array_data = from_ffi(array, &self.schema).unwrap();
             let struct_array = StructArray::from(array_data);
             let new = RecordBatch::from(struct_array);
             duckdb_destroy_data_chunk(&mut chunk);
