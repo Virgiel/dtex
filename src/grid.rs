@@ -1,152 +1,221 @@
-use std::sync::Arc;
-
-use reedline::KeyCode;
-use tui::{crossterm::event::KeyEvent, Canvas};
+use reedline::KeyModifiers;
+use tui::{
+    crossterm::event::{KeyCode as Key, KeyEvent},
+    unicode_width::UnicodeWidthStr,
+    Canvas,
+};
 
 use crate::{
-    describe::Describer,
-    fmt::Col,
-    source::{DataFrame, FrameSource, Loader, Source},
+    fmt::{rtrim, Col},
+    source::DataFrame,
     style,
     tab::{GridUI, Status},
-    task::Runner,
     OnKey,
 };
 
-use self::{frame_grid::FrameGrid, nav::Nav};
+use self::{nav::Nav, projection::Projection, sizer::Sizer};
 
-mod frame_grid;
 pub mod nav;
 mod projection;
 mod sizer;
 
 enum State {
     Normal,
-    Description(Describer),
+    Size,
+    Projection,
 }
-pub struct SourceGrid {
-    source: Arc<Source>,
-    frame: FrameSource,
-    runner: Runner,
-    loader: Loader,
-    error: String,
+
+pub struct Grid {
+    projection: Projection,
+    pub nav: Nav,
+    sizer: Sizer,
     state: State,
-    grid: FrameGrid,
-    d_grid: FrameGrid,
 }
 
-impl SourceGrid {
-    pub fn new(source: Arc<Source>, runner: Runner) -> Self {
+impl Grid {
+    pub fn new() -> Self {
         Self {
-            loader: Loader::load(source.clone(), &runner),
-            frame: FrameSource::empty(),
-            runner,
-            source,
-            error: String::new(),
+            projection: Projection::new(),
+            nav: Nav::new(),
+            sizer: Sizer::new(),
             state: State::Normal,
-            grid: FrameGrid::new(),
-            d_grid: FrameGrid::new(),
-        }
-    }
-
-    pub fn is_loading(&self) -> Option<(&'static str, f64)> {
-        if let State::Description(desrc) = &self.state {
-            if let Some(progress) = desrc.is_loading() {
-                return Some(("describe", progress));
-            }
-        }
-        if let Some(progress) = self.loader.is_loading() {
-            Some(("load", progress))
-        } else if self.frame.is_loading() {
-            Some(("stream", -1.))
-        } else {
-            None
-        }
-    }
-
-    pub fn set_source(&mut self, source: Arc<Source>) {
-        self.source = source.clone();
-        self.loader = Loader::load(source.clone(), &self.runner);
-
-        // Clear current description
-        if let State::Description(desrc) = &mut self.state {
-            *desrc = Describer::describe(source, &self.runner);
-        }
-    }
-
-    pub fn set_err(&mut self, err: String) {
-        self.error = err;
-    }
-
-    pub fn draw(&mut self, c: &mut Canvas) -> GridUI {
-        match self.loader.tick() {
-            Ok(Some(new)) => self.frame = new,
-            Ok(None) => {}
-            Err(e) => self.error = format!("loader: {}", e.0),
-        }
-        if let State::Description(desrc) = &mut self.state {
-            desrc.tick();
-        }
-        self.frame.goal(self.grid.nav.goal().saturating_add(1));
-        self.frame.tick();
-
-        // Draw error bar
-        if !self.error.is_empty() {
-            let mut l = c.btm();
-            l.draw(&self.error, style::error());
-        }
-
-        match &self.state {
-            State::Normal => self
-                .grid
-                .draw(c, self.frame.df())
-                .streaming(self.frame.is_streaming()),
-            State::Description(d) => match d.df() {
-                None => self
-                    .grid
-                    .draw(c, self.frame.df())
-                    .streaming(self.frame.is_streaming()),
-                Some(Ok(df)) => self.d_grid.draw(c, df),
-                Some(Err(err)) => {
-                    let mut l = c.btm();
-                    l.draw(err.0, style::error());
-                    self.d_grid.draw(c, &DataFrame::empty())
-                }
-            }
-            .normal(Status::Description),
-        }
-    }
-
-    pub fn nav(&self) -> Nav {
-        match &self.state {
-            State::Normal => self.grid.nav.clone(),
-            State::Description(_) => self.d_grid.nav.clone(),
-        }
-    }
-
-    pub fn set_nav(&mut self, nav: Nav) {
-        match &self.state {
-            State::Normal => self.grid.nav = nav,
-            State::Description(_) => self.d_grid.nav = nav,
         }
     }
 
     pub fn on_key(&mut self, event: &KeyEvent) -> OnKey {
-        self.set_err(String::new());
+        let shift = event.modifiers.contains(KeyModifiers::SHIFT);
+        let idx = self.nav.c_col();
+        let proj_idx = self.projection.project(idx);
         match self.state {
-            State::Normal => match (self.grid.on_key(event), event.code) {
-                (OnKey::Pass, KeyCode::Char('d')) => {
-                    self.state =
-                        State::Description(Describer::describe(self.source.clone(), &self.runner))
-                }
-                (e, _) => return e,
+            State::Normal => match event.code {
+                Key::Char('s') => self.state = State::Size,
+                Key::Char('p') => self.state = State::Projection,
+                Key::Char('g') => self.nav.top(),
+                Key::Char('G') => self.nav.btm(),
+                Key::Left | Key::Char('H') if shift => self.nav.win_left(),
+                Key::Down | Key::Char('J') if shift => self.nav.win_down(),
+                Key::Up | Key::Char('K') if shift => self.nav.win_up(),
+                Key::Right | Key::Char('L') if shift => self.nav.win_right(),
+                Key::Left | Key::Char('h') => self.nav.left(),
+                Key::Down | Key::Char('j') => self.nav.down(),
+                Key::Up | Key::Char('k') => self.nav.up(),
+                Key::Right | Key::Char('l') => self.nav.right(),
+                Key::Char('q') => return OnKey::Quit,
+                _ => return OnKey::Pass,
             },
-            State::Description(_) => match (self.d_grid.on_key(event), event.code) {
-                (OnKey::Quit, _) | (OnKey::Pass, KeyCode::Esc) => self.state = State::Normal,
-                (e, _) => return e,
+            State::Projection => match event.code {
+                Key::Esc | Key::Char('p') => self.state = State::Normal,
+                Key::Left | Key::Char('h') => {
+                    self.projection.cmd(idx, projection::Cmd::Left);
+                    self.nav.left()
+                }
+                Key::Right | Key::Char('l') => {
+                    self.projection.cmd(idx, projection::Cmd::Right);
+                    self.nav.right();
+                }
+                Key::Down | Key::Char('j') => {
+                    self.projection.cmd(idx, projection::Cmd::Hide);
+                    self.state = State::Normal
+                }
+                Key::Up | Key::Char('k') => {
+                    self.projection.reset(); // TODO keep column focus
+                    self.state = State::Normal
+                }
+                _ => {}
+            },
+            State::Size => match event.code {
+                Key::Esc | Key::Char('s') => self.state = State::Normal,
+                Key::Char('r') => {
+                    self.sizer.reset();
+                    self.state = State::Normal;
+                }
+                Key::Char('f') => {
+                    self.sizer.fit_current_size();
+                    self.state = State::Normal;
+                }
+                Key::Char(' ') => {
+                    self.sizer.toggle();
+                    self.state = State::Normal;
+                }
+                Key::Left | Key::Char('h') => {
+                    self.sizer.cmd(proj_idx, sizer::Cmd::Less);
+                }
+                Key::Down | Key::Char('j') => {
+                    self.sizer.cmd(proj_idx, sizer::Cmd::Constrain);
+                    self.state = State::Normal;
+                }
+                Key::Up | Key::Char('k') => {
+                    self.sizer.cmd(proj_idx, sizer::Cmd::Free);
+                    self.state = State::Normal;
+                }
+                Key::Right | Key::Char('l') => {
+                    self.sizer.cmd(proj_idx, sizer::Cmd::More);
+                }
+                _ => {}
+            },
+        };
+
+        OnKey::Continue
+    }
+
+    pub fn draw(&mut self, c: &mut Canvas, df: &dyn Frame) -> GridUI {
+        let nb_col = df.nb_col();
+        let nb_row = df.nb_row();
+        self.projection.set_nb_cols(nb_col);
+        let visible_cols = self.projection.nb_cols();
+
+        let v_row = c.height() - 1; // header bar
+        let row_off = self.nav.row_offset(nb_row, v_row);
+        // Nb call necessary to print the biggest index
+        let mut ids_col = df.idx_iter(row_off, v_row);
+        ids_col.align_right();
+        // Whole canvas minus index col
+        let mut remaining_width = c.width() - ids_col.budget() - 1;
+        let mut cols = Vec::new();
+        let mut coll_off_iter = self.nav.col_iter(visible_cols);
+        // Fill canvas with columns
+        while remaining_width > 0 {
+            if let Some(off) = coll_off_iter.next() {
+                let idx = self.projection.project(off);
+                let name = df.col_name(idx);
+                let col = df.col_iter(idx, row_off, v_row);
+                let size = self.sizer.fit(idx, col.budget(), name.width());
+                let allowed = size.min(remaining_width);
+                cols.push((off, name, col, allowed));
+                let separator = if cols.len() == nb_col { 0 } else { 1 }; // Skip last separator
+                remaining_width = remaining_width.saturating_sub(allowed + separator);
+            } else {
+                break;
+            }
+        }
+        // Redistribute remaining width
+        for (off, _, _, allowed) in &mut cols {
+            if remaining_width == 0 {
+                break;
+            }
+            let idx = self.projection.project(*off);
+            *allowed = self.sizer.fill(idx, &mut remaining_width);
+        }
+
+        cols.sort_unstable_by_key(|(i, _, _, _)| *i);
+        drop(coll_off_iter);
+
+        let fmt_buf = &mut String::with_capacity(256);
+        // Draw headers
+        {
+            let line = &mut c.top();
+            line.draw(
+                format_args!("{:>1$} ", '#', ids_col.budget()),
+                style::index().bold(),
+            );
+
+            for (off, name, _, budget) in &cols {
+                let style = if *off == self.nav.c_col() {
+                    style::selected().bold()
+                } else {
+                    style::primary().bold()
+                };
+                line.draw(
+                    format_args!("{:<1$}", rtrim(name, fmt_buf, *budget), budget),
+                    style,
+                );
+                line.draw("│", style::separator());
+            }
+        }
+
+        // Draw rows
+        for r in 0..v_row.min(nb_row - row_off) {
+            let current = r == self.nav.c_row() - row_off;
+            let style = if current {
+                style::selected()
+            } else {
+                style::primary()
+            };
+            let line = &mut c.top();
+            line.draw(
+                format_args!("{} ", ids_col.fmt(fmt_buf, r, ids_col.budget())),
+                if current {
+                    style::index().bold()
+                } else {
+                    style::index()
+                },
+            );
+            for (_, _, col, budget) in &cols {
+                line.draw(format_args!("{}", col.fmt(fmt_buf, r, *budget)), style);
+                line.draw("│", style::separator());
+            }
+        }
+
+        GridUI {
+            col_name: (self.projection.nb_cols() > 0)
+                .then(|| df.col_name(self.projection.project(self.nav.c_col()))),
+            progress: ((self.nav.c_row() + 1) * 100) / nb_row.max(1),
+            status: match self.state {
+                State::Normal => Status::Normal,
+                State::Size => Status::Size,
+                State::Projection => Status::Projection,
             },
         }
-        OnKey::Continue
     }
 }
 

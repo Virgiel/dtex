@@ -24,9 +24,9 @@ impl Shell {
         }
     }
 
-    pub fn on_key(&mut self, event: &KeyEvent, on_enter: impl FnOnce(&str) -> bool) -> OnKey {
+    pub fn on_key(&mut self, event: &KeyEvent) -> (OnKey, Option<String>) {
         match event.code {
-            KeyCode::Esc => return OnKey::Quit,
+            KeyCode::Esc => return (OnKey::Quit, None),
             KeyCode::Char(c) => {
                 self.prompt.exec(PromptCmd::Write(c));
             }
@@ -39,14 +39,13 @@ impl Shell {
             }
             KeyCode::Enter => {
                 let (str, _) = self.prompt.state();
-                if on_enter(str) {
-                    self.prompt.exec(PromptCmd::New(true));
-                    return OnKey::Quit;
-                }
+                let str = str.into();
+                self.prompt.exec(PromptCmd::New(true));
+                return (OnKey::Quit, Some(str));
             }
-            _ => return OnKey::Pass,
+            _ => return (OnKey::Pass, None),
         }
-        OnKey::Continue
+        (OnKey::Continue, None)
     }
 
     pub fn draw(&mut self, c: &mut Canvas) {

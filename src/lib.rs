@@ -205,7 +205,7 @@ impl App {
     }
 
     fn is_loading(&self) -> bool {
-        self.tabs[self.nav.c_col()].is_loading()
+        self.tabs[self.nav.c_col()].is_loading().is_some()
     }
 }
 
