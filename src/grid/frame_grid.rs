@@ -60,7 +60,7 @@ impl FrameGrid {
                 _ => return OnKey::Pass,
             },
             State::Projection => match event.code {
-                Key::Esc | Key::Char('q') | Key::Char('p') => self.state = State::Normal,
+                Key::Esc | Key::Char('p') => self.state = State::Normal,
                 Key::Left | Key::Char('h') => {
                     self.projection.cmd(idx, projection::Cmd::Left);
                     self.nav.left()
@@ -80,7 +80,7 @@ impl FrameGrid {
                 _ => {}
             },
             State::Size => match event.code {
-                Key::Esc | Key::Char('q') | Key::Char('s') => self.state = State::Normal,
+                Key::Esc | Key::Char('s') => self.state = State::Normal,
                 Key::Char('r') => {
                     self.sizer.reset();
                     self.state = State::Normal;

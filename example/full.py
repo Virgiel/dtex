@@ -1,14 +1,9 @@
 import polars as pl
 import duckdb
 import dtex
-import os
-
-script_dir = os.path.dirname(__file__)
-nfl = os.path.join(script_dir, "../data/nfl.csv")
-postcode = os.path.join(script_dir, "../data/postcode.arrow")
 
 polars_lazy = (
-    pl.scan_ipc(postcode).groupby("code_postal").count().sort("count", descending=True)
+    pl.scan_ipc("data/postcode.arrow").groupby("code_postal").count().sort("count", descending=True)
 )
 polars_eager = polars_lazy.collect()
 arrow = polars_eager.to_arrow()
