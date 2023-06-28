@@ -8,7 +8,7 @@ use crate::{
     grid::Grid,
     navigator::Navigator,
     shell::Shell,
-    source::{FrameSource, Loader, Source},
+    source::{FrameLoader, Source, StreamingFrame},
     spinner::Spinner,
     style,
     task::Runner,
@@ -29,9 +29,9 @@ enum View {
 pub struct Tab {
     pub source: Arc<Source>,
     view: View,
-    frame: FrameSource,
+    frame: StreamingFrame,
     runner: Runner,
-    loader: Loader,
+    loader: FrameLoader,
     error: String,
     grid: Grid,
     shell: Shell,
@@ -46,10 +46,10 @@ impl Tab {
             grid: Grid::new(),
             state: State::Normal,
             view: View::Normal,
-            loader: Loader::load(source.clone(), &runner),
+            loader: FrameLoader::load(source.clone(), &runner),
             shell: Shell::new(source.sql()),
             spinner: Spinner::new(),
-            frame: FrameSource::empty(),
+            frame: StreamingFrame::empty(),
             error: String::new(),
             runner,
             source,
@@ -58,7 +58,7 @@ impl Tab {
 
     pub fn set_source(&mut self, source: Source) {
         self.source = Arc::new(source);
-        self.loader = Loader::load(self.source.clone(), &self.runner);
+        self.loader = FrameLoader::load(self.source.clone(), &self.runner);
 
         // Refresh current description
         if let View::Description {

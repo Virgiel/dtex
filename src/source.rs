@@ -25,8 +25,8 @@ pub struct Pending {
     error: Option<String>,
 }
 
-pub enum FrameSource {
-    Full(DataFrame),
+pub enum StreamingFrame {
+    Loaded(DataFrame),
     Error {
         df: DataFrame,
         error: String,
@@ -38,17 +38,17 @@ pub enum FrameSource {
     },
 }
 
-impl FrameSource {
+impl StreamingFrame {
     pub fn empty() -> Self {
         Self::full(DataFrame::empty())
     }
 
     pub fn full(full: DataFrame) -> Self {
-        Self::Full(full)
+        Self::Loaded(full)
     }
 
-    pub fn streaming(preload: DataFrame, chunks: Chunks, runner: Runner) -> Self {
-        let loaded = preload.num_rows();
+    pub fn streaming(preloaded: DataFrame, chunks: Chunks, runner: Runner) -> Self {
+        let loaded = preloaded.num_rows();
         let task = runner.task(
             AtomicUsize::new(0),
             Pending {
@@ -56,17 +56,17 @@ impl FrameSource {
                 full: false,
                 error: None,
             },
-            move |ctx| worker(ctx, loaded, chunks),
+            move |ctx| Self::streaming_task(ctx, loaded, chunks),
         );
         Self::Streaming {
             task,
-            df: preload,
+            df: preloaded,
             is_loading: true,
         }
     }
 
     pub fn tick(&mut self) {
-        if let FrameSource::Streaming {
+        if let StreamingFrame::Streaming {
             task,
             df,
             is_loading,
@@ -78,9 +78,9 @@ impl FrameSource {
                 (p.full, p.error.take())
             });
             if full {
-                *self = FrameSource::Full(std::mem::take(df))
+                *self = StreamingFrame::Loaded(std::mem::take(df))
             } else if let Some(error) = error {
-                *self = FrameSource::Error {
+                *self = StreamingFrame::Error {
                     df: std::mem::take(df),
                     error,
                 }
@@ -93,7 +93,7 @@ impl FrameSource {
     /// Update the loading goal
     pub fn goal(&self, goal: usize) {
         // Goal is only used when streaming
-        if let FrameSource::Streaming { task, df, .. } = self {
+        if let StreamingFrame::Streaming { task, df, .. } = self {
             let prev = task.state().load(Ordering::Relaxed);
             if prev != goal {
                 // Update goal
@@ -108,61 +108,62 @@ impl FrameSource {
 
     pub fn df(&self) -> &DataFrame {
         match self {
-            FrameSource::Full(df)
-            | FrameSource::Error { df, .. }
-            | FrameSource::Streaming { df, .. } => df,
+            StreamingFrame::Loaded(df)
+            | StreamingFrame::Error { df, .. }
+            | StreamingFrame::Streaming { df, .. } => df,
         }
     }
 
     pub fn is_streaming(&self) -> bool {
-        !matches!(self, FrameSource::Full(_))
+        !matches!(self, StreamingFrame::Loaded(_))
     }
 
     pub fn is_loading(&self) -> bool {
         match self {
-            FrameSource::Full(_) | FrameSource::Error { .. } => false,
-            FrameSource::Streaming { is_loading, .. } => *is_loading,
+            StreamingFrame::Loaded(_) | StreamingFrame::Error { .. } => false,
+            StreamingFrame::Streaming { is_loading, .. } => *is_loading,
         }
     }
-}
 
-fn worker(ctx: Ctx<AtomicUsize, Pending>, mut loaded: usize, mut chunks: Chunks) {
-    loop {
-        while loaded < ctx.state().load(Ordering::Relaxed) {
+    /// Background streaming task
+    fn streaming_task(ctx: Ctx<AtomicUsize, Pending>, mut loaded: usize, mut chunks: Chunks) {
+        loop {
+            while loaded < ctx.state().load(Ordering::Relaxed) {
+                if ctx.canceled() {
+                    return;
+                }
+                match chunks.next() {
+                    Some(Ok(batch)) => {
+                        loaded += batch.num_rows();
+                        ctx.lock(|p| p.batches.push(batch))
+                    }
+                    Some(Err(err)) => {
+                        ctx.lock(|p| p.error = Some(err.to_string()));
+                        return;
+                    }
+                    None => {
+                        ctx.lock(|p| p.full = true);
+                        return;
+                    }
+                }
+            }
             if ctx.canceled() {
                 return;
             }
-            match chunks.next() {
-                Some(Ok(batch)) => {
-                    loaded += batch.num_rows();
-                    ctx.lock(|p| p.batches.push(batch))
-                }
-                Some(Err(err)) => {
-                    ctx.lock(|p| p.error = Some(err.to_string()));
-                    return;
-                }
-                None => {
-                    ctx.lock(|p| p.full = true);
-                    return;
-                }
-            }
+            ctx.wait();
         }
-        if ctx.canceled() {
-            return;
-        }
-        ctx.wait();
     }
 }
 
-pub enum Loader {
-    Finished(Option<FrameSource>),
-    Pending(DuckTask<FrameSource>),
+pub enum FrameLoader {
+    Finished(Option<StreamingFrame>),
+    Pending(DuckTask<StreamingFrame>),
 }
 
-impl Loader {
+impl FrameLoader {
     pub fn load(source: Arc<Source>, runner: &Runner) -> Self {
         if let Some(df) = source.sync_full() {
-            Self::Finished(Some(FrameSource::full(df)))
+            Self::Finished(Some(StreamingFrame::full(df)))
         } else {
             let _runner = runner.clone();
             Self::Pending(runner.duckdb(move |con| {
@@ -171,22 +172,22 @@ impl Loader {
                     .next()
                     .map(|r| r.map(|r| r.into()))
                     .unwrap_or_else(|| Ok(DataFrame::default()))?;
-                Ok(FrameSource::streaming(preload, chunks, _runner))
+                Ok(StreamingFrame::streaming(preload, chunks, _runner))
             }))
         }
     }
 
-    pub fn tick(&mut self) -> Result<Option<FrameSource>> {
+    pub fn tick(&mut self) -> Result<Option<StreamingFrame>> {
         match self {
-            Loader::Finished(src) => Ok(src.take()),
-            Loader::Pending(task) => match task.tick() {
+            FrameLoader::Finished(src) => Ok(src.take()),
+            FrameLoader::Pending(task) => match task.tick() {
                 Ok(Some(src)) => {
-                    *self = Loader::Finished(None);
+                    *self = FrameLoader::Finished(None);
                     Ok(Some(src))
                 }
                 Ok(None) => Ok(None),
                 Err(it) => {
-                    *self = Loader::Finished(None);
+                    *self = FrameLoader::Finished(None);
                     Err(it)
                 }
             },
@@ -195,8 +196,8 @@ impl Loader {
 
     pub fn is_loading(&self) -> Option<f64> {
         match self {
-            Loader::Finished(_) => None,
-            Loader::Pending(task) => Some(task.progress()),
+            FrameLoader::Finished(_) => None,
+            FrameLoader::Pending(task) => Some(task.progress()),
         }
     }
 }
@@ -204,7 +205,7 @@ impl Loader {
 enum Kind {
     Empty,
     Eager(DataFrame),
-    Sql {
+    Shell {
         current: Option<Arc<Source>>,
         sql: String,
     },
@@ -241,6 +242,7 @@ impl Source {
                 .unwrap_or_default()
                 .to_string_lossy()
                 .to_string(),
+
             kind: Kind::File {
                 display_path: path.to_string_lossy().to_string(),
                 path: path.canonicalize().unwrap_or(path.to_path_buf()),
@@ -251,7 +253,7 @@ impl Source {
     pub fn from_sql(sql: &str, current: Option<Arc<Self>>) -> Self {
         Self {
             name: "shell".into(),
-            kind: Kind::Sql {
+            kind: Kind::Shell {
                 sql: sql.to_string(),
                 current,
             },
@@ -265,14 +267,44 @@ impl Source {
                 con.bind(df.clone())?;
                 con
             }
-            Kind::Sql { current, .. } => match current {
+            Kind::Shell { current, .. } => match current {
                 Some(it) => it.init(con)?,
                 None => con,
             },
             Kind::File { display_path, .. } => {
-                con.execute(&format!(
-                    "CREATE VIEW current AS SELECT * FROM '{display_path}'"
-                ))?;
+                if display_path.ends_with(".sql") {
+                    let content = std::fs::read_to_string(display_path)?;
+                    let queries = content
+                        .split(';')
+                        .filter(|s| !s.trim().is_empty())
+                        .collect::<Vec<_>>();
+
+                    match queries.as_slice() {
+                        [] => {
+                            con.execute("CREATE TABLE current (i INTEGER)")?;
+                        }
+                        [content @ .., tail] => {
+                            for q in content {
+                                con.execute(q)?;
+                            }
+                            con.execute(&format!("CREATE VIEW current AS {tail}"))?;
+                        }
+                    }
+                } else {
+                    let path = display_path
+                        .trim_end_matches(".gz")
+                        .trim_end_matches(".zst");
+                    if [".parquet", ".csv", ".tsv", ".json", ".jsonl", ".ndjson"]
+                        .iter()
+                        .any(|s| path.ends_with(s))
+                    {
+                        con.execute(&format!(
+                            "CREATE VIEW current AS SELECT * FROM '{display_path}'"
+                        ))?;
+                    } else {
+                        return Err("Unsupported file format".into());
+                    }
+                }
                 con
             }
         })
@@ -281,7 +313,7 @@ impl Source {
     pub fn sql(&self) -> &str {
         match &self.kind {
             Kind::Empty => "",
-            Kind::Sql { sql, .. } => sql,
+            Kind::Shell { sql, .. } => sql,
             Kind::Eager { .. } | Kind::File { .. } => "SELECT * FROM current",
         }
     }
@@ -292,14 +324,14 @@ impl Source {
 
     pub fn path(&self) -> Option<&Path> {
         match &self.kind {
-            Kind::Empty | Kind::Eager { .. } | Kind::Sql { .. } => None,
+            Kind::Empty | Kind::Eager { .. } | Kind::Shell { .. } => None,
             Kind::File { path, .. } => Some(path),
         }
     }
 
     pub fn display_path(&self) -> Option<&str> {
         match &self.kind {
-            Kind::Empty | Kind::Eager { .. } | Kind::Sql { .. } => None,
+            Kind::Empty | Kind::Eager { .. } | Kind::Shell { .. } => None,
             Kind::File { display_path, .. } => Some(display_path),
         }
     }
@@ -309,14 +341,14 @@ impl Source {
         match &self.kind {
             Kind::Empty => Some(DataFrame::empty()),
             Kind::Eager(df) => Some(df.clone()),
-            Kind::File { .. } | Kind::Sql { .. } => None,
+            Kind::File { .. } | Kind::Shell { .. } => None,
         }
     }
 
     pub fn describe(&self, con: Connection) -> Result<Chunks> {
         let sql = match &self.kind {
             Kind::Empty => return Err("Nothing to describe".into()),
-            Kind::Sql { sql, .. } => format!("SUMMARIZE {sql}"),
+            Kind::Shell { sql, .. } => format!("SUMMARIZE {sql}"),
             Kind::Eager { .. } | Kind::File { .. } => "SUMMARIZE SELECT * FROM current".into(),
         };
         Ok(self.init(con)?.query(&sql)?)
@@ -325,7 +357,7 @@ impl Source {
     pub fn load(&self, con: Connection) -> Result<Chunks> {
         let sql = match &self.kind {
             Kind::Empty => return Err("Nothing to load".into()),
-            Kind::Sql { sql, .. } => sql,
+            Kind::Shell { sql, .. } => sql,
             Kind::Eager { .. } | Kind::File { .. } => "SELECT * FROM current",
         };
         Ok(self.init(con)?.query(sql)?)

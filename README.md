@@ -97,6 +97,5 @@ dtex.ex([polars_lazy])
 ## TODO
 
 - Better navigation mode
-- Support csv files for complex queries
 - Smart formatting of path ~ for home and ‥ instead of ..
 - Better fs events handlinge

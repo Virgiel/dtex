@@ -33,7 +33,7 @@ impl Projection {
 
     /// Get the column idx at this offset
     pub fn project(&self, off: usize) -> usize {
-        self.cols[off]
+        *self.cols.get(off).unwrap_or(&0)
     }
 
     /// Apply command
