@@ -96,7 +96,7 @@ dtex.ex([polars_lazy])
 
 ## TODO
 
-- Replace cursor navigation with scroll navigation
+- Better navigation mode
 - Support csv files for complex queries
 - Smart formatting of path ~ for home and ‥ instead of ..
 - Better fs events handlinge

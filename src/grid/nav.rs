@@ -5,9 +5,8 @@ pub struct Nav {
     o_row: usize,
     o_col: usize,
     // Cursor positions
-    c_row: usize,
     c_col: usize,
-    t_row: usize,
+    c_row: usize,
     // Max positions
     m_row: usize,
     m_col: usize,
@@ -21,9 +20,8 @@ impl Nav {
         Self {
             o_row: 0,
             o_col: 0,
-            c_row: 0,
             c_col: 0,
-            t_row: 0,
+            c_row: 0,
             m_row: 0,
             m_col: 0,
             v_row: 0,
@@ -31,26 +29,22 @@ impl Nav {
         }
     }
 
-    pub fn c_row(&self) -> usize {
-        self.c_row
-    }
-
     pub fn c_col(&self) -> usize {
         self.c_col
     }
 
     pub fn goal(&self) -> usize {
-        self.t_row
+        self.c_row.saturating_add(self.v_row + 1)
     }
 
     pub fn up(&mut self) {
-        self.c_row = self.c_row.saturating_sub(1);
-        self.t_row = self.c_row;
+        self.o_row = self.o_row.saturating_sub(1);
+        self.c_row = self.o_row;
     }
 
     pub fn down(&mut self) {
-        self.c_row = self.c_row.saturating_add(1);
-        self.t_row = self.c_row;
+        self.o_row = self.o_row.saturating_add(1);
+        self.c_row = self.o_row;
     }
 
     pub fn left(&mut self) {
@@ -78,25 +72,23 @@ impl Nav {
     }
 
     pub fn top(&mut self) {
-        self.c_row = 0;
-        self.t_row = self.c_row;
+        self.o_row = 0;
+        self.c_row = self.o_row;
     }
 
     pub fn btm(&mut self) {
-        self.c_row = usize::MAX;
-        self.t_row = self.c_row;
+        self.o_row = usize::MAX;
+        self.c_row = self.o_row;
     }
 
     pub fn win_up(&mut self) {
         self.o_row = self.o_row.saturating_sub(self.v_row);
         self.c_row = self.o_row;
-        self.t_row = self.c_row;
     }
 
     pub fn win_down(&mut self) {
         self.o_row += self.v_row;
         self.c_row = self.o_row;
-        self.t_row = self.c_row;
     }
 
     pub fn win_left(&mut self) {
@@ -115,13 +107,7 @@ impl Nav {
         // Sync grid dimension
         self.m_row = nb_row.saturating_sub(1);
         // Ensure cursor pos fit in grid dimension
-        self.c_row = self.t_row.min(self.m_row);
-        // Ensure cursor is in view
-        if self.c_row < self.o_row {
-            self.o_row = self.c_row;
-        } else if self.c_row >= self.o_row + v_row {
-            self.o_row = self.c_row - v_row + 1;
-        }
+        self.o_row = self.c_row.min(self.m_row.saturating_sub(self.v_row));
         self.o_row
     }
 
@@ -169,8 +155,12 @@ impl Nav {
     }
 
     pub fn go_to(&mut self, (row, col): (usize, usize)) {
-        self.c_row = row;
+        self.o_row = row;
         self.c_col = col;
-        self.t_row = row;
+        self.c_row = self.o_row;
+    }
+
+    pub fn progress(&self) -> usize {
+        ((self.o_row.saturating_add(self.v_row).min(self.m_row)) * 100) / self.m_row.max(1)
     }
 }

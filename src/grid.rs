@@ -185,23 +185,16 @@ impl Grid {
 
         // Draw rows
         for r in 0..v_row.min(nb_row - row_off) {
-            let current = r == self.nav.c_row() - row_off;
-            let style = if current {
-                style::selected()
-            } else {
-                style::primary()
-            };
             let line = &mut c.top();
             line.draw(
                 format_args!("{} ", ids_col.fmt(fmt_buf, r, ids_col.budget())),
-                if current {
-                    style::index().bold()
-                } else {
-                    style::index()
-                },
+                style::index(),
             );
             for (_, _, col, budget) in &cols {
-                line.draw(format_args!("{}", col.fmt(fmt_buf, r, *budget)), style);
+                line.draw(
+                    format_args!("{}", col.fmt(fmt_buf, r, *budget)),
+                    style::primary(),
+                );
                 line.draw("│", style::separator());
             }
         }
@@ -209,7 +202,6 @@ impl Grid {
         GridUI {
             col_name: (self.projection.nb_cols() > 0)
                 .then(|| df.col_name(self.projection.project(self.nav.c_col()))),
-            progress: ((self.nav.c_row() + 1) * 100) / nb_row.max(1),
             status: match self.state {
                 State::Normal => Status::Normal,
                 State::Size => Status::Size,

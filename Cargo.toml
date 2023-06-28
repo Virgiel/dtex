@@ -23,7 +23,7 @@ notify = "6.0.0"
 notify-debouncer-full = "0.2.0"
 # Sql parser
 sqlparser = "0.34.0"
-arrow = { git = "https://github.com/Virgiel/arrow-rs", branch = "clean-ffi", features = [
+arrow = { git = "https://github.com/apache/arrow-rs", features = [
     "ffi",
 ], default-features = false }
 libduckdb-sys = { git = "https://github.com/Virgiel/duckdb-rs-tmp", features = [

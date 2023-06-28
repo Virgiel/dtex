@@ -102,11 +102,7 @@ impl Tab {
         }
 
         // Draw grid
-        let GridUI {
-            col_name,
-            progress,
-            status,
-        } = match &mut self.view {
+        let GridUI { col_name, status } = match &mut self.view {
             View::Normal => self.grid.draw(c, self.frame.df()),
             View::Description {
                 descr: describer,
@@ -154,7 +150,10 @@ impl Tab {
             if self.frame.is_streaming() {
                 l.rdraw(format_args!(" ~"), style::primary());
             } else {
-                l.rdraw(format_args!(" {progress:>3}%"), style::primary());
+                l.rdraw(
+                    format_args!(" {:>3}%", self.grid().nav.progress()),
+                    style::primary(),
+                );
             }
         }
 
@@ -242,6 +241,5 @@ pub enum Status {
 
 pub struct GridUI {
     pub col_name: Option<String>, // TODO borrow
-    pub progress: usize,
     pub status: Status,
 }
