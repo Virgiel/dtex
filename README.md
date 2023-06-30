@@ -16,6 +16,10 @@ dtex <filenames>
 
 ### From python
 
+```sh
+pip install git+https://github.com/Virgiel/dtex#subdirectory=py-dtex
+```
+
 ```py
 import polars as pl
 import dtex
@@ -25,7 +29,6 @@ polars_lazy = (
 )
 
 dtex.ex([polars_lazy])
-
 ```
 
 ## Features

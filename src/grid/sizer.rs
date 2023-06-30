@@ -97,17 +97,12 @@ impl Sizer {
         if idx >= self.cols.len() {
             return;
         }
+        let stat = self.cols[idx].0;
         self.cols[idx].1 = match cmd {
             Cmd::Constrain => Constraint::Fit,
             Cmd::Free => Constraint::Fill,
-            Cmd::Less => Constraint::Fixe(
-                self.cols[idx]
-                    .0
-                    .size
-                    .saturating_sub(1)
-                    .max(self.min_size(idx)),
-            ),
-            Cmd::More => Constraint::Fixe(self.cols[idx].0.size.saturating_add(1)),
+            Cmd::Less => Constraint::Fixe(stat.size.saturating_sub(1).max(self.min_size(idx))),
+            Cmd::More => Constraint::Fixe(stat.size.saturating_add(1).min(stat.content)),
         };
     }
 
