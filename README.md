@@ -58,12 +58,10 @@ dtex.ex([polars_lazy])
 | `L` or `Maj →` | Move window right          |
 | `K` or `Maj ↑` | Move window up             |
 | `J` or `Maj ↓` | Move window down           |
-| `g`            | Move to first row          |
-| `G`            | Move to last row           |
 | `d`            | Switch to description view |
+| `g`            | Switch to navigation mode  |
 | `s`            | Switch to sizing mode      |
 | `p`            | Switch to projection mode  |
-| `0-9`          | Switch to navigation mode  |
 | `q`            | Close tab                  |
 
 ### Sizing
@@ -91,6 +89,19 @@ dtex.ex([polars_lazy])
 
 ### Navigation
 
+#### No prompt
+
+| Key              | Action                |
+| ---------------- | --------------------- |
+| `Esc` or `Enter` | Return to normal mode |
+| `h` or `←`       | Move to first col     |
+| `k` or `→`       | Move to last col      |
+| `k` or `↑`       | Move to first row     |
+| `j` or `↓`       | Move to last row      |
+| other            | Write into prompt     |
+
+#### With prompt
+
 | Key     | Action                                 |
 | ------- | -------------------------------------- |
 | `Esc`   | Return to normal mode and reset cursor |
@@ -99,6 +110,5 @@ dtex.ex([polars_lazy])
 
 ## TODO
 
-- Better navigation mode
 - Smart formatting of path ~ for home and ‥ instead of ..
 - Better fs events handlinge

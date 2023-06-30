@@ -81,6 +81,14 @@ impl Nav {
         self.c_row = self.o_row;
     }
 
+    pub(crate) fn start(&mut self) {
+        self.c_col = 0;
+    }
+
+    pub(crate) fn end(&mut self) {
+        self.c_col = usize::MAX
+    }
+
     pub fn win_up(&mut self) {
         self.o_row = self.o_row.saturating_sub(self.v_row);
         self.c_row = self.o_row;

@@ -50,8 +50,6 @@ impl Grid {
             State::Normal => match event.code {
                 Key::Char('s') => self.state = State::Size,
                 Key::Char('p') => self.state = State::Projection,
-                Key::Char('g') => self.nav.top(),
-                Key::Char('G') => self.nav.btm(),
                 Key::Left | Key::Char('H') if shift => self.nav.win_left(),
                 Key::Down | Key::Char('J') if shift => self.nav.win_down(),
                 Key::Up | Key::Char('K') if shift => self.nav.win_up(),

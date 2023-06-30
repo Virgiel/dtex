@@ -1,7 +1,9 @@
 use std::sync::Arc;
 
-use reedline::KeyCode;
-use tui::{crossterm::event::KeyEvent, Canvas};
+use tui::{
+    crossterm::event::{KeyCode as Key, KeyEvent},
+    Canvas,
+};
 
 use crate::{
     describe::Describer,
@@ -170,18 +172,20 @@ impl Tab {
         let describing = matches!(self.view, View::Description { .. });
         match &mut self.state {
             State::Normal => match (self.grid().on_key(event), event.code) {
-                (OnKey::Pass, KeyCode::Char('$')) => self.state = State::Shell,
-                (OnKey::Pass, code) if Navigator::activate(&code) => {
-                    self.state = State::Nav(Navigator::new(self.grid().nav.clone()));
-                    return self.on_key(event);
-                }
-                (OnKey::Pass, KeyCode::Esc) if describing => self.view = View::Normal,
-                (OnKey::Pass, KeyCode::Char('d')) if !describing => {
-                    self.view = View::Description {
-                        descr: Describer::describe(self.source.clone(), &self.runner),
-                        grid: Grid::new(),
+                (OnKey::Pass, code) => match code {
+                    Key::Char('$') => self.state = State::Shell,
+                    Key::Char('g') => {
+                        self.state = State::Nav(Navigator::new(self.grid().nav.clone()))
                     }
-                }
+                    Key::Esc if describing => self.view = View::Normal,
+                    Key::Char('d') if !describing => {
+                        self.view = View::Description {
+                            descr: Describer::describe(self.source.clone(), &self.runner),
+                            grid: Grid::new(),
+                        }
+                    }
+                    _ => {}
+                },
                 (OnKey::Quit, _) if !describing => return true,
                 _ => {}
             },
@@ -195,7 +199,7 @@ impl Tab {
                     self.state = State::Normal
                 }
             }
-            State::Nav(nav) => match nav.on_key(event.code) {
+            State::Nav(navigator) => match navigator.on_key(event.code) {
                 Ok(nav) => self.grid().nav = nav,
                 Err(nav) => {
                     self.grid().nav = nav;
