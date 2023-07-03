@@ -74,7 +74,10 @@ impl Tab {
     pub fn draw(&mut self, c: &mut Canvas) {
         // Tick
         match self.loader.tick() {
-            Ok(Some(new)) => self.frame = new,
+            Ok(Some(new)) => {
+                self.frame = new;
+                self.grid = Grid::new()
+            }
             Ok(None) => {}
             Err(e) => self.error = format!("loader: {}", e.0),
         }
@@ -149,7 +152,7 @@ impl Tab {
             self.spinner.state(false);
         }
         if !task_progress {
-            if self.frame.is_streaming() {
+            if self.frame.is_streaming() && matches!(self.view, View::Normal) {
                 l.rdraw(format_args!(" ~"), style::primary());
             } else {
                 l.rdraw(
