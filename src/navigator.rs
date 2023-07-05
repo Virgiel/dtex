@@ -36,29 +36,24 @@ impl Navigator {
                 return Err(self.curr.clone());
             }
         }
-        let prompt = self.prompt.get_or_insert_with(|| Prompt::new(""));
-        match code {
-            Key::Char(c) if c.is_ascii_digit() => {
-                prompt.exec(PromptCmd::Write(c));
-                if let Ok(row) = prompt.state().0.parse::<usize>() {
-                    self.curr.go_to((row, self.curr.c_col()));
-                }
-            }
-            Key::Left => prompt.exec(PromptCmd::Left),
-            Key::Right => prompt.exec(PromptCmd::Right),
-            Key::Up => prompt.exec(PromptCmd::Prev),
-            Key::Down => prompt.exec(PromptCmd::Next),
-            Key::Backspace => {
-                prompt.exec(PromptCmd::Delete);
-                if let Ok(row) = prompt.state().0.parse::<usize>() {
-                    self.curr.go_to((row, self.curr.c_col()));
-                }
-            }
+        let cmd = match code {
+            Key::Char(c) if c.is_ascii_digit() => PromptCmd::Write(c),
+            Key::Left => PromptCmd::Left,
+            Key::Right => PromptCmd::Right,
+            Key::Up => PromptCmd::Prev,
+            Key::Down => PromptCmd::Next,
+            Key::Backspace => PromptCmd::Delete,
             Key::Esc => return Err(self.prev.clone()),
             Key::Enter => return Err(self.curr.clone()),
-            _ => {}
-        }
+            _ => return Ok(self.curr.clone()),
+        };
 
+        let prompt = self.prompt.get_or_insert_with(|| Prompt::new(""));
+        prompt.exec(cmd);
+
+        if let Ok(row) = prompt.state().0.parse::<usize>() {
+            self.curr.go_to((row, self.curr.c_col()));
+        }
         Ok(self.curr.clone())
     }
 
