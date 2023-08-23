@@ -74,12 +74,12 @@ impl Tab {
     pub fn draw(&mut self, c: &mut Canvas) {
         // Tick
         match self.loader.tick() {
-            Ok(Some(new)) => {
+            Some(Ok(new)) => {
                 self.frame = new;
                 self.grid = Grid::new()
             }
-            Ok(None) => {}
-            Err(e) => self.error = format!("loader: {}", e.0),
+            Some(Err(e)) => self.error = format!("loader: {}", e.0),
+            None => {}
         }
         if let View::Description {
             descr: describer, ..

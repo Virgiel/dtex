@@ -24,9 +24,9 @@ impl Describer {
     pub fn tick(&mut self) {
         match self {
             Describer::Pending(task) => match task.tick() {
-                Ok(Some(df)) => *self = Self::Ready(df),
-                Ok(None) => {}
-                Err(it) => *self = Self::Error(it),
+                Some(Ok(df)) => *self = Self::Ready(df),
+                Some(Err(it)) => *self = Self::Error(it),
+                None => {}
             },
             Describer::Ready(_) | Describer::Error(_) => {}
         }

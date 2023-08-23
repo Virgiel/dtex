@@ -149,13 +149,13 @@ impl<T> DuckTask<T> {
         self.ctx.progress()
     }
 
-    pub fn tick(&mut self) -> crate::error::Result<Option<T>> {
+    pub fn tick(&mut self) -> Option<crate::error::Result<T>> {
         match self.receiver.try_recv() {
-            Ok(result) => Some(result).transpose(),
+            Ok(result) => Some(result),
             Err(it) => match it {
-                oneshot::TryRecvError::Empty => Ok(None),
+                oneshot::TryRecvError::Empty => None,
                 oneshot::TryRecvError::Disconnected => {
-                    Err("Task failed without error".to_string().into())
+                    Some(Err("Task failed without error".to_string().into()))
                 }
             },
         }

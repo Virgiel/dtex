@@ -177,19 +177,19 @@ impl FrameLoader {
         }
     }
 
-    pub fn tick(&mut self) -> Result<Option<StreamingFrame>> {
+    pub fn tick(&mut self) -> Option<Result<StreamingFrame>> {
         match self {
-            FrameLoader::Finished(src) => Ok(src.take()),
+            FrameLoader::Finished(src) => Ok(src.take()).transpose(),
             FrameLoader::Pending(task) => match task.tick() {
-                Ok(Some(src)) => {
+                Some(Ok(src)) => {
                     *self = FrameLoader::Finished(None);
-                    Ok(Some(src))
+                    Some(Ok(src))
                 }
-                Ok(None) => Ok(None),
-                Err(it) => {
+                Some(Err(it)) => {
                     *self = FrameLoader::Finished(None);
-                    Err(it)
+                    Some(Err(it))
                 }
+                None => None,
             },
         }
     }
