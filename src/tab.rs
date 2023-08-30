@@ -127,16 +127,16 @@ impl Tab {
         let (status, style) = match status {
             Status::Normal => match self.state {
                 State::Normal => match self.view {
-                    View::Normal => (" DTEX ", style::state_default()),
-                    View::Description { .. } => (" DESC ", style::state_other()),
+                    View::Normal => ("DTEX", style::state_default()),
+                    View::Description { .. } => ("DESC", style::state_other()),
                 },
-                State::Shell => (" $SQL ", style::state_action()),
-                State::Nav(_) => (" GOTO ", style::state_action()),
+                State::Shell => ("SQL", style::state_action()),
+                State::Nav(_) => ("GOTO", style::state_action()),
             },
-            Status::Size => (" SIZE ", style::state_action()),
-            Status::Projection => (" PROJ ", style::state_alternate()),
+            Status::Size => ("SIZE", style::state_action()),
+            Status::Projection => ("PROJ", style::state_alternate()),
         };
-        l.draw(status, style);
+        l.draw(format_args!(" {status} "), style);
         l.draw(" ", style::primary());
         let mut task_progress = false;
         if let Some((task, progress)) = self.is_loading() {

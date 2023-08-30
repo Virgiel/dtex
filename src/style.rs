@@ -20,20 +20,24 @@ pub fn separator() -> Style {
     none().fg(Color::DarkGrey).dim()
 }
 
+fn state() -> Style {
+    none().fg(Color::Black).bold()
+}
+
 pub fn state_action() -> Style {
-    none().bg(Color::Green).bold()
+    state().bg(Color::Green)
 }
 
 pub fn state_default() -> Style {
-    none().bg(Color::DarkGrey).bold()
+    state().bg(Color::DarkGrey)
 }
 
 pub fn state_alternate() -> Style {
-    none().bg(Color::Magenta).bold()
+    state().bg(Color::Magenta)
 }
 
 pub fn state_other() -> Style {
-    none().bg(Color::Cyan).bold()
+    state().bg(Color::Cyan)
 }
 
 pub fn tab() -> Style {
