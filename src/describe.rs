@@ -3,7 +3,7 @@ use std::sync::Arc;
 use crate::{
     duckdb::Connection,
     error::Result,
-    fmt::Col,
+    fmt::{Col, GridBuffer},
     grid::Frame,
     source::{DataFrame, Source},
     task::{DuckTask, Runner},
@@ -59,16 +59,16 @@ impl Frame for Description {
         self.0.num_rows()
     }
 
-    fn idx_iter(&self, skip: usize, take: usize) -> Col {
-        self.0.iter(0, skip, take)
+    fn idx_iter(&self, buf: &mut GridBuffer, skip: usize, take: usize) -> Col {
+        self.0.iter(buf, 0, skip, take)
     }
 
     fn col_name(&self, idx: usize) -> String {
         self.0.schema().all_fields()[idx + 1].name().clone()
     }
 
-    fn col_iter(&self, idx: usize, skip: usize, take: usize) -> Col {
-        self.0.iter(idx + 1, skip, take)
+    fn col_iter(&self, buf: &mut GridBuffer, idx: usize, skip: usize, take: usize) -> Col {
+        self.0.iter(buf, idx + 1, skip, take)
     }
 }
 

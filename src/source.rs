@@ -15,7 +15,7 @@ use crate::{
     array_to_iter,
     duckdb::{Chunks, Connection},
     error::Result,
-    fmt::Col,
+    fmt::{Col, ColBuilder, GridBuffer},
     task::{Ctx, DuckTask, Runner, Task},
 };
 
@@ -417,20 +417,27 @@ impl DataFrame {
         Self::default()
     }
 
-    pub fn iter(&self, idx: usize, mut skip: usize, mut take: usize) -> Col {
-        let mut col = Col::new();
+    pub fn iter<'a>(
+        &self,
+        buf: &mut GridBuffer,
+        idx: usize,
+        mut skip: usize,
+        mut take: usize,
+    ) -> Col {
+        let mut col = ColBuilder::new(buf);
+        let tmp = &mut col;
         for chunks in &self.0.batchs {
             if skip > chunks.num_rows() {
                 skip -= chunks.num_rows()
             } else if take > 0 {
-                array_to_iter(&chunks.columns()[idx], &mut col, skip, take);
+                array_to_iter(&chunks.columns()[idx], tmp, skip, take);
                 take = take.saturating_sub(chunks.num_rows() - skip);
                 skip = 0
             } else {
                 break;
             }
         }
-        col
+        col.build()
     }
 
     pub fn num_rows(&self) -> usize {

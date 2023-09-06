@@ -9,7 +9,7 @@ use arrow::{
     util::display::{ArrayFormatter, FormatOptions},
 };
 use event::event_listener;
-use fmt::{rtrim, Col};
+use fmt::{rtrim, ColBuilder, GridBuffer};
 use grid::nav::Nav;
 use notify::{RecommendedWatcher, Watcher};
 use notify_debouncer_full::FileIdMap;
@@ -78,12 +78,14 @@ struct App {
     tabs: Vec<Tab>,
     nav: Nav,
     debouncer: notify_debouncer_full::Debouncer<RecommendedWatcher, FileIdMap>,
+    buf: GridBuffer,
 }
 impl App {
     pub fn new(debouncer: notify_debouncer_full::Debouncer<RecommendedWatcher, FileIdMap>) -> Self {
         Self {
             tabs: vec![],
             nav: Nav::new(),
+            buf: GridBuffer::new(),
             debouncer,
         }
     }
@@ -99,9 +101,10 @@ impl App {
     }
 
     pub fn draw(&mut self, c: &mut Canvas) {
+        self.buf.new_frame(c.width());
         let mut coll_off_iter = self.nav.col_iter(self.tabs.len());
         if self.tabs.len() == 1 {
-            self.tabs[0].draw(c)
+            self.tabs[0].draw(c, &mut self.buf)
         } else if !self.tabs.is_empty() {
             let mut cols = Vec::new();
             // Fill canvas with tabs name
@@ -136,7 +139,7 @@ impl App {
                 );
                 line.draw(" ", style::separator());
             }
-            self.tabs[self.nav.c_col()].draw(c)
+            self.tabs[self.nav.c_col()].draw(c, &mut self.buf)
         }
     }
 
@@ -246,48 +249,55 @@ macro_rules! prim {
     };
 }
 
-pub fn array_to_iter<'a>(array: &'a ArrayRef, stat: &mut Col<'a>, skip: usize, take: usize) {
+pub fn array_to_iter<'a, 'b, 'c>(
+    array: &'a ArrayRef,
+    bd: &'c mut ColBuilder<'a, 'b>,
+    skip: usize,
+    take: usize,
+) {
     #[allow(clippy::unnecessary_cast)]
     match array.data_type() {
         DataType::Null => iter!(
             (0..array.len()).map(|_| None::<bool>),
-            stat,
+            bd,
             skip,
             take,
             add_bool
         ),
         DataType::Boolean => {
-            iter!(array.as_boolean(), stat, skip, take, add_bool)
+            iter!(array.as_boolean(), bd, skip, take, add_bool)
         }
-        DataType::Int8 => prim!(array, stat, skip, take, Int8Type),
-        DataType::Int16 => prim!(array, stat, skip, take, Int16Type),
-        DataType::Int32 => prim!(array, stat, skip, take, Int32Type),
-        DataType::Int64 => prim!(array, stat, skip, take, Int64Type),
-        DataType::UInt8 => prim!(array, stat, skip, take, UInt8Type),
-        DataType::UInt16 => prim!(array, stat, skip, take, UInt16Type),
-        DataType::UInt32 => prim!(array, stat, skip, take, UInt32Type),
-        DataType::UInt64 => prim!(array, stat, skip, take, UInt64Type),
+        DataType::Int8 => prim!(array, bd, skip, take, Int8Type),
+        DataType::Int16 => prim!(array, bd, skip, take, Int16Type),
+        DataType::Int32 => prim!(array, bd, skip, take, Int32Type),
+        DataType::Int64 => prim!(array, bd, skip, take, Int64Type),
+        DataType::UInt8 => prim!(array, bd, skip, take, UInt8Type),
+        DataType::UInt16 => prim!(array, bd, skip, take, UInt16Type),
+        DataType::UInt32 => prim!(array, bd, skip, take, UInt32Type),
+        DataType::UInt64 => prim!(array, bd, skip, take, UInt64Type),
         DataType::Float16 => {
             let array = array
                 .as_primitive::<Float16Type>()
                 .into_iter()
                 .map(|f| f.map(|f| f.to_f32()));
-            iter!(array, stat, skip, take, add_nb)
+            iter!(array, bd, skip, take, add_nb)
         }
-        DataType::Float32 => prim!(array, stat, skip, take, Float32Type),
-        DataType::Float64 => prim!(array, stat, skip, take, Float64Type),
+        DataType::Float32 => prim!(array, bd, skip, take, Float32Type),
+        DataType::Float64 => prim!(array, bd, skip, take, Float64Type),
         DataType::Utf8 => {
-            iter!(array.as_string::<i32>(), stat, skip, take, add_str)
+            iter!(array.as_string::<i32>(), bd, skip, take, add_str)
         }
-        DataType::LargeUtf8 => iter!(array.as_string::<i64>(), stat, skip, take, add_str),
+        DataType::LargeUtf8 => iter!(array.as_string::<i64>(), bd, skip, take, add_str),
         DataType::Decimal128(_, _) => {
             let array: &Decimal128Array = array.as_any().downcast_ref().unwrap();
-            iter!(array, stat, skip, take, add_nb)
+            iter!(array, bd, skip, take, add_nb)
         }
         _ => {
-            let fmt = ArrayFormatter::try_new(array, &FormatOptions::default()).unwrap();
+            let fmt =
+                ArrayFormatter::try_new(array, &FormatOptions::default().with_display_error(false))
+                    .unwrap();
             for i in (0..array.len()).skip(skip).take(take) {
-                stat.add_dsp(fmt.value(i));
+                bd.add_dsp(fmt.value(i));
             }
         }
     }

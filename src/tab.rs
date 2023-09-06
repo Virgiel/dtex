@@ -7,6 +7,7 @@ use tui::{
 
 use crate::{
     describe::Describer,
+    fmt::GridBuffer,
     grid::Grid,
     navigator::Navigator,
     shell::Shell,
@@ -71,7 +72,7 @@ impl Tab {
         }
     }
 
-    pub fn draw(&mut self, c: &mut Canvas) {
+    pub fn draw(&mut self, c: &mut Canvas, buf: &mut GridBuffer) {
         // Tick
         match self.loader.tick() {
             Some(Ok(new)) => {
@@ -108,17 +109,17 @@ impl Tab {
 
         // Draw grid
         let GridUI { col_name, status } = match &mut self.view {
-            View::Normal => self.grid.draw(c, self.frame.df()),
+            View::Normal => self.grid.draw(c, self.frame.df(), buf),
             View::Description {
                 descr: describer,
                 grid,
             } => match describer.df() {
-                None => self.grid.draw(c, self.frame.df()),
-                Some(Ok(df)) => grid.draw(c, df),
+                None => self.grid.draw(c, self.frame.df(), buf),
+                Some(Ok(df)) => grid.draw(c, df, buf),
                 Some(Err(err)) => {
                     let mut l = c.btm();
                     l.draw(err.0, style::error());
-                    grid.draw(c, &DataFrame::empty())
+                    grid.draw(c, &DataFrame::empty(), buf)
                 }
             },
         };

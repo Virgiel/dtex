@@ -7,44 +7,106 @@ use tui::unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
 use crate::Cell;
 
-pub struct Col<'a> {
-    max_lhs: usize,
-    max_rhs: usize,
-    align_right: bool,
-    buf: String,
-    cells: Vec<Cell<'a>>,
+pub struct GridBuffer {
+    cell_buf: String,
+    fmt_buf: String,
+    max: usize,
 }
 
-impl<'a> Col<'a> {
+impl GridBuffer {
     pub fn new() -> Self {
         Self {
-            max_lhs: 0,
-            max_rhs: 0,
-            align_right: false,
-            buf: String::new(),
-            cells: Vec::new(),
+            cell_buf: String::new(),
+            fmt_buf: String::new(),
+            max: 0,
+        }
+    }
+
+    pub fn fmt_buf(&mut self) -> &mut String {
+        &mut self.fmt_buf
+    }
+
+    pub fn new_frame(&mut self, width: usize) {
+        self.cell_buf.clear();
+        self.fmt_buf.clear();
+        self.max = width;
+    }
+}
+
+pub struct CellFmtLimit<'a> {
+    buf: &'a mut String,
+    max: usize,
+    curr: usize,
+}
+
+impl<'a> CellFmtLimit<'a> {
+    pub fn new(buf: &'a mut GridBuffer) -> Self {
+        Self {
+            buf: &mut buf.cell_buf,
+            max: buf.max,
+            curr: 0,
+        }
+    }
+
+    pub fn reset(&mut self) {
+        self.curr = 0;
+    }
+
+    pub fn len(&self) -> usize {
+        self.buf.len()
+    }
+}
+
+impl<'a> std::fmt::Write for CellFmtLimit<'a> {
+    fn write_str(&mut self, s: &str) -> std::fmt::Result {
+        if self.curr < self.max {
+            self.buf.push_str(s);
+            self.curr += s.width();
+            Ok(())
+        } else {
+            Err(std::fmt::Error::default())
+        }
+    }
+}
+
+pub struct ColBuilder<'a, 'b> {
+    buf: CellFmtLimit<'b>,
+    col: Col<'a>,
+}
+
+impl<'a, 'b> ColBuilder<'a, 'b> {
+    pub fn new(buf: &'b mut GridBuffer) -> Self {
+        Self {
+            buf: CellFmtLimit::new(buf),
+            col: Col {
+                max_lhs: 0,
+                max_rhs: 0,
+                align_right: false,
+                cells: Vec::new(),
+            },
         }
     }
 
     fn buff_dsp(&mut self, dsp: impl Display) -> Range<usize> {
+        self.buf.reset();
         let start = self.buf.len();
-        write!(&mut self.buf, "{dsp}").unwrap();
+        write!(&mut self.buf, "{dsp}").ok();
         let end = self.buf.len();
         start..end
     }
 
     pub fn add_null(&mut self) {
-        self.cells.push(Cell::Null)
+        self.col.cells.push(Cell::Null)
     }
 
     pub fn add_bool(&mut self, bool: bool) {
-        self.cells.push(Cell::Bool(bool));
-        self.max_lhs = self.max_lhs.max(5);
+        self.col.cells.push(Cell::Bool(bool));
+        self.col.max_lhs = self.col.max_lhs.max(5);
     }
 
     pub fn add_str(&mut self, str: &'a str) {
-        self.cells.push(Cell::Str(str));
-        self.max_lhs = self.max_lhs.max(str.width())
+        self.col.cells.push(Cell::Str(str));
+        self.col.max_lhs = self.col.max_lhs.max(str.width())
     }
 
     pub fn add_nb(&mut self, nb: impl lexical_core::ToLexical) {
@@ -56,22 +118,35 @@ impl<'a> Col<'a> {
         } else {
             (str.len(), 0)
         };
-        self.max_lhs = self.max_lhs.max(lhs);
-        self.max_rhs = self.max_rhs.max(rhs);
+        self.col.max_lhs = self.col.max_lhs.max(lhs);
+        self.col.max_rhs = self.col.max_rhs.max(rhs);
         let ty = Cell::Nb {
             range: self.buff_dsp(str),
             lhs,
             rhs,
         };
-        self.cells.push(ty);
+        self.col.cells.push(ty);
     }
 
     pub(crate) fn add_dsp(&mut self, dsp: impl Display) {
         let range = self.buff_dsp(dsp);
-        self.max_lhs = self.max_lhs.max(self.buf[range.clone()].width());
-        self.cells.push(Cell::Dsp(range));
+        self.col.max_lhs = self.col.max_lhs.max(self.buf.buf[range.clone()].width());
+        self.col.cells.push(Cell::Dsp(range));
     }
 
+    pub fn build(self) -> Col<'a> {
+        self.col
+    }
+}
+
+pub struct Col<'a> {
+    max_lhs: usize,
+    max_rhs: usize,
+    align_right: bool,
+    cells: Vec<Cell<'a>>,
+}
+
+impl<'a> Col<'a> {
     pub fn align_right(&mut self) {
         self.align_right = true;
     }
@@ -80,7 +155,8 @@ impl<'a> Col<'a> {
         self.max_lhs + self.max_rhs
     }
 
-    pub fn fmt<'b>(&self, buf: &'b mut String, idx: usize, budget: usize) -> &'b str {
+    pub fn fmt<'b>(&self, grid: &'b mut GridBuffer, idx: usize, budget: usize) -> &'b str {
+        let buf = &mut grid.fmt_buf;
         buf.clear();
         fn pad(buff: &mut String, amount: usize) {
             for _ in 0..amount {
@@ -98,10 +174,10 @@ impl<'a> Col<'a> {
             }
             Cell::Str(str) if self.align_right => write!(buf, "{str:>0$}", self.budget()).unwrap(),
             Cell::Str(str) => write!(buf, "{str}").unwrap(),
-            Cell::Dsp(range) => write!(buf, "{}", &self.buf[range.clone()]).unwrap(),
+            Cell::Dsp(range) => write!(buf, "{}", &grid.cell_buf[range.clone()]).unwrap(),
             Cell::Null => { /* TODO grey null ? */ }
             Cell::Nb { range, rhs, .. } => {
-                let str = &self.buf[range.clone()];
+                let str = &grid.cell_buf[range.clone()];
                 pad(buf, (self.max_lhs + rhs) - str.len());
                 buf.push_str(str);
             }

@@ -6,7 +6,7 @@ use tui::{
 };
 
 use crate::{
-    fmt::{rtrim, Col},
+    fmt::{rtrim, Col, GridBuffer, ColBuilder},
     source::DataFrame,
     style,
     tab::{GridUI, Status},
@@ -116,7 +116,7 @@ impl Grid {
         OnKey::Continue
     }
 
-    pub fn draw(&mut self, c: &mut Canvas, df: &dyn Frame) -> GridUI {
+    pub fn draw(&mut self, c: &mut Canvas, df: &dyn Frame, buf: &mut GridBuffer) -> GridUI {
         let nb_col = df.nb_col();
         let nb_row = df.nb_row();
         self.projection.set_nb_cols(nb_col);
@@ -125,7 +125,7 @@ impl Grid {
         let v_row = c.height() - 1; // header bar
         let row_off = self.nav.row_offset(nb_row, v_row);
         // Nb call necessary to print the biggest index
-        let mut ids_col = df.idx_iter(row_off, v_row);
+        let mut ids_col = df.idx_iter(buf, row_off, v_row);
         ids_col.align_right();
         // Whole canvas minus index col
         let mut remaining_width = c.width() - ids_col.budget() - 1;
@@ -136,7 +136,7 @@ impl Grid {
             if let Some(off) = coll_off_iter.next() {
                 let idx = self.projection.project(off);
                 let name = df.col_name(idx);
-                let col = df.col_iter(idx, row_off, v_row);
+                let col = df.col_iter(buf, idx, row_off, v_row);
                 let size = self.sizer.fit(idx, col.budget(), name.width());
                 let allowed = size.min(remaining_width);
                 cols.push((off, name, col, allowed));
@@ -158,7 +158,6 @@ impl Grid {
         cols.sort_unstable_by_key(|(i, _, _, _)| *i);
         drop(coll_off_iter);
 
-        let fmt_buf = &mut String::with_capacity(256);
         // Draw headers
         {
             let line = &mut c.top();
@@ -174,7 +173,7 @@ impl Grid {
                     style::primary().bold()
                 };
                 line.draw(
-                    format_args!("{:<1$}", rtrim(name, fmt_buf, *budget), budget),
+                    format_args!("{:<1$}", rtrim(name, buf.fmt_buf(), *budget), budget),
                     style,
                 );
                 line.draw("│", style::separator());
@@ -185,12 +184,12 @@ impl Grid {
         for r in 0..v_row.min(nb_row - row_off) {
             let line = &mut c.top();
             line.draw(
-                format_args!("{} ", ids_col.fmt(fmt_buf, r, ids_col.budget())),
+                format_args!("{} ", ids_col.fmt(buf, r, ids_col.budget())),
                 style::index(),
             );
             for (_, _, col, budget) in &cols {
                 line.draw(
-                    format_args!("{}", col.fmt(fmt_buf, r, *budget)),
+                    format_args!("{}", col.fmt(buf, r, *budget)),
                     style::primary(),
                 );
                 line.draw("│", style::separator());
@@ -212,9 +211,9 @@ impl Grid {
 pub trait Frame {
     fn nb_col(&self) -> usize;
     fn nb_row(&self) -> usize;
-    fn idx_iter(&self, skip: usize, take: usize) -> Col;
+    fn idx_iter(&self, buf: &mut GridBuffer, skip: usize, take: usize) -> Col;
     fn col_name(&self, idx: usize) -> String;
-    fn col_iter(&self, idx: usize, skip: usize, take: usize) -> Col;
+    fn col_iter(&self, buf: &mut GridBuffer, idx: usize, skip: usize, take: usize) -> Col;
 }
 
 impl Frame for DataFrame {
@@ -226,19 +225,19 @@ impl Frame for DataFrame {
         self.num_rows()
     }
 
-    fn idx_iter(&self, skip: usize, take: usize) -> Col {
-        let mut col = Col::new();
+    fn idx_iter(&self, buf: &mut GridBuffer, skip: usize, take: usize) -> Col {
+        let mut col = ColBuilder::new(buf);
         for i in skip..skip + take {
             col.add_nb(i);
         }
-        col
+        col.build()
     }
 
     fn col_name(&self, idx: usize) -> String {
         self.schema().all_fields()[idx].name().clone()
     }
 
-    fn col_iter(&self, idx: usize, skip: usize, take: usize) -> Col {
-        self.iter(idx, skip, take)
+    fn col_iter(&self, buf: &mut GridBuffer,  idx: usize, skip: usize, take: usize) -> Col {
+        self.iter(buf, idx, skip, take)
     }
 }
