@@ -1,12 +1,11 @@
-use reedline::KeyModifiers;
 use tui::{
-    crossterm::event::{KeyCode as Key, KeyEvent},
+    crossterm::event::{KeyCode as Key, KeyEvent, KeyModifiers},
     unicode_width::UnicodeWidthStr,
     Canvas,
 };
 
 use crate::{
-    fmt::{rtrim, Col, GridBuffer, ColBuilder},
+    fmt::{rtrim, Col, ColBuilder, GridBuffer},
     source::DataFrame,
     style,
     tab::{GridUI, Status},
@@ -237,7 +236,7 @@ impl Frame for DataFrame {
         self.schema().all_fields()[idx].name().clone()
     }
 
-    fn col_iter(&self, buf: &mut GridBuffer,  idx: usize, skip: usize, take: usize) -> Col {
+    fn col_iter(&self, buf: &mut GridBuffer, idx: usize, skip: usize, take: usize) -> Col {
         self.iter(buf, idx, skip, take)
     }
 }

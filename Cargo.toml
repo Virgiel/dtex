@@ -9,21 +9,21 @@ mimalloc = { version = "0.1", default-features = false }
 # Terminal UI
 tui = { git = "https://github.com/Virgiel/tui" }
 # Line editor tool
-reedline = "0.23.0"
+reedline = "0.24.0"
 # Fast lexical conversion
 lexical-core = "0.8.5"
 # CLI args parser
-clap = { version = "4.4.0", features = ["derive"] }
+clap = { version = "4.4.4", features = ["derive"] }
 # Efficient oneshot channel
-oneshot = "0.1.5"
+oneshot = "0.1.6"
 # Lazy values
 once_cell = "1.18.0"
 # File system watcher
-notify = "6.1.0"
+notify = "6.1.1"
 notify-debouncer-full = "0.3.1"
 # Sql parser
-sqlparser = "0.37.0"
-arrow = { version = "46.0.0", default-features = false, features = ["ffi"] }
+sqlparser = "0.38.0"
+arrow = { version = "47.0.0", default-features = false, features = ["ffi"] }
 libduckdb-sys = { git = "https://github.com/Virgiel/duckdb-rs-tmp", features = [
     "parquet",
     "json",

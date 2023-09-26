@@ -13,7 +13,6 @@ use fmt::{rtrim, ColBuilder, GridBuffer};
 use grid::nav::Nav;
 use notify::{RecommendedWatcher, Watcher};
 use notify_debouncer_full::FileIdMap;
-use reedline::KeyModifiers;
 use tab::Tab;
 use tui::{
     crossterm::event::{Event, KeyCode, KeyEventKind},
@@ -161,7 +160,9 @@ impl App {
                             pass = false;
                         }
                         KeyCode::Char('c' | 'd')
-                            if event.modifiers.contains(KeyModifiers::CONTROL) =>
+                            if event
+                                .modifiers
+                                .contains(tui::crossterm::event::KeyModifiers::CONTROL) =>
                         {
                             return true;
                         }
@@ -249,9 +250,9 @@ macro_rules! prim {
     };
 }
 
-pub fn array_to_iter<'a, 'b, 'c>(
+pub fn array_to_iter<'a>(
     array: &'a ArrayRef,
-    bd: &'c mut ColBuilder<'a, 'b>,
+    bd: &mut ColBuilder<'a, '_>,
     skip: usize,
     take: usize,
 ) {

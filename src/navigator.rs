@@ -1,5 +1,4 @@
-use reedline::KeyCode as Key;
-use tui::{none, Canvas};
+use tui::{crossterm::event::KeyCode as Key, none, Canvas};
 
 use crate::{
     grid::nav::Nav,

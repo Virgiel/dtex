@@ -1,5 +1,8 @@
-use reedline::KeyCode;
-use tui::{crossterm::event::KeyEvent, unicode_width::UnicodeWidthChar, Canvas};
+use tui::{
+    crossterm::event::{KeyCode, KeyEvent},
+    unicode_width::UnicodeWidthChar,
+    Canvas,
+};
 
 use crate::{style, OnKey};
 

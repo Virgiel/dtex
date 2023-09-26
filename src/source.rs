@@ -417,13 +417,7 @@ impl DataFrame {
         Self::default()
     }
 
-    pub fn iter<'a>(
-        &self,
-        buf: &mut GridBuffer,
-        idx: usize,
-        mut skip: usize,
-        mut take: usize,
-    ) -> Col {
+    pub fn iter(&self, buf: &mut GridBuffer, idx: usize, mut skip: usize, mut take: usize) -> Col {
         let mut col = ColBuilder::new(buf);
         let tmp = &mut col;
         for chunks in &self.0.batchs {

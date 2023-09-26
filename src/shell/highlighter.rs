@@ -14,7 +14,7 @@ impl Highlighter {
             styles: vec![(0, tui::none())],
             idx: 0,
         };
-        for token in sqlparser::tokenizer::Tokenizer::new(&DuckDbDialect::default(), query)
+        for token in sqlparser::tokenizer::Tokenizer::new(&DuckDbDialect, query)
             .tokenize_with_location()
             .unwrap_or_default()
         {

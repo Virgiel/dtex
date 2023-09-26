@@ -64,7 +64,7 @@ impl<'a> std::fmt::Write for CellFmtLimit<'a> {
             self.curr += s.width();
             Ok(())
         } else {
-            Err(std::fmt::Error::default())
+            Err(std::fmt::Error)
         }
     }
 }
