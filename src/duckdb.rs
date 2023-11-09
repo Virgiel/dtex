@@ -17,6 +17,7 @@ use libduckdb_sys::{
     duckdb_execute_pending, duckdb_free, duckdb_interrupt, duckdb_open_ext, duckdb_pending_error,
     duckdb_pending_execute_task, duckdb_pending_prepared_streaming, duckdb_pending_result,
     duckdb_pending_state_DUCKDB_PENDING_ERROR,
+    duckdb_pending_state_DUCKDB_PENDING_NO_TASKS_AVAILABLE,
     duckdb_pending_state_DUCKDB_PENDING_RESULT_NOT_READY,
     duckdb_pending_state_DUCKDB_PENDING_RESULT_READY, duckdb_prepare, duckdb_prepare_error,
     duckdb_prepared_statement, duckdb_query, duckdb_query_progress, duckdb_result,
@@ -256,7 +257,8 @@ impl Connection {
 
                 #[allow(non_upper_case_globals)]
                 match state {
-                    duckdb_pending_state_DUCKDB_PENDING_RESULT_NOT_READY => continue,
+                    duckdb_pending_state_DUCKDB_PENDING_RESULT_NOT_READY
+                    | duckdb_pending_state_DUCKDB_PENDING_NO_TASKS_AVAILABLE => continue,
                     duckdb_pending_state_DUCKDB_PENDING_RESULT_READY => break,
                     duckdb_pending_state_DUCKDB_PENDING_ERROR => {
                         let err = duckdb_pending_error(pending);

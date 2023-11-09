@@ -314,7 +314,7 @@ impl Source {
         match &self.kind {
             Kind::Empty => "",
             Kind::Shell { sql, .. } => sql,
-            Kind::Eager { .. } | Kind::File { .. } => "SELECT * FROM current",
+            Kind::Eager { .. } | Kind::File { .. } => "FROM current SELECT *",
         }
     }
 
@@ -358,7 +358,7 @@ impl Source {
         let sql = match &self.kind {
             Kind::Empty => return Err("Nothing to load".into()),
             Kind::Shell { sql, .. } => sql,
-            Kind::Eager { .. } | Kind::File { .. } => "SELECT * FROM current",
+            Kind::Eager { .. } | Kind::File { .. } => "FROM current SELECT *",
         };
         Ok(self.init(con)?.query(sql)?)
     }
