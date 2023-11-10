@@ -17,17 +17,19 @@ pub mod prompt;
 pub struct Shell {
     prompt: Prompt<15>,
     offset: usize,
+    pending: bool,
 }
 
 impl Shell {
     pub fn new(init: &str) -> Self {
         Self {
-            prompt: Prompt::new(init),
+            prompt: Prompt::new(&init),
             offset: 0,
+            pending: false,
         }
     }
 
-    pub fn on_key(&mut self, event: &KeyEvent) -> (OnKey, Option<String>, bool) {
+    pub fn on_key(&mut self, event: &KeyEvent) -> (OnKey, Option<&str>, bool) {
         match event.code {
             KeyCode::Esc => return (OnKey::Quit, None, false),
             KeyCode::Char(c) => {
@@ -42,17 +44,31 @@ impl Shell {
             }
             KeyCode::Enter => {
                 self.prompt.exec(PromptCmd::New(true));
-                return (OnKey::Quit, None, true);
+                let (str, _) = self.prompt.state();
+                self.pending = false;
+                return (OnKey::Quit, Some(str), true);
             }
             _ => return (OnKey::Pass, None, false),
         }
-        let (str, _) = self.prompt.state();
-        (OnKey::Continue, Some(str.into()), false)
+
+        self.pending = true;
+        (OnKey::Continue, None, false)
     }
 
-    pub fn draw(&mut self, c: &mut Canvas) {
+    pub fn draw(&mut self, c: &mut Canvas, loading: bool, err: bool) {
         let mut l = c.btm();
-        l.draw("$ ", style::separator());
+        l.draw(
+            "$ ",
+            if self.pending {
+                style::selected()
+            } else if loading {
+                style::progress()
+            } else if err {
+                style::error()
+            } else {
+                style::separator()
+            },
+        );
         let (str, cursor) = self.prompt.state();
         let mut highlighter = Highlighter::load(str);
         let mut pending_cursor = true;

@@ -15,18 +15,19 @@ use crate::{
     spinner::Spinner,
     style,
     task::Runner,
-    view::{View, ViewUI},
+    view::{View, ViewState},
     OnKey,
 };
 
 enum State {
     Normal,
     Description(DescriberView),
-    Shell(Option<SourceView>),
+    Shell(SourceView),
     Nav(Navigator),
 }
 
 pub struct SourceView {
+    pub source: Arc<Source>,
     frame: StreamingFrame,
     loader: FrameLoader,
     pub grid: Grid,
@@ -36,6 +37,7 @@ pub struct SourceView {
 impl SourceView {
     pub fn new(source: Arc<Source>, runner: &Runner) -> Self {
         Self {
+            source: source.clone(),
             frame: StreamingFrame::empty(),
             loader: FrameLoader::load(source, runner),
             grid: Grid::new(),
@@ -43,13 +45,24 @@ impl SourceView {
         }
     }
 
+    pub fn take(&self) -> Self {
+        Self {
+            source: self.source.clone(),
+            frame: self.frame.take(),
+            loader: FrameLoader::Finished(None),
+            grid: self.grid.clone(),
+            load_error: None,
+        }
+    }
+
     pub fn set_source(&mut self, source: Arc<Source>, runner: &Runner) {
+        self.source = source.clone();
         self.loader = FrameLoader::load(source, runner);
     }
 }
 
 impl View for SourceView {
-    fn ui(&mut self) -> ViewUI {
+    fn tick(&mut self) -> ViewState {
         // Tick
         match self.loader.tick() {
             Some(Ok(new)) => {
@@ -63,7 +76,7 @@ impl View for SourceView {
         self.frame.goal(self.grid.nav.goal().saturating_add(1));
         self.frame.tick();
 
-        ViewUI {
+        ViewState {
             loading: if let Some(progress) = self.loader.is_loading() {
                 Some(("load", progress))
             } else if self.frame.is_loading() {
@@ -80,8 +93,7 @@ impl View for SourceView {
 }
 
 pub struct Tab {
-    pub source: Arc<Source>,
-    view: SourceView,
+    pub view: SourceView,
     runner: Runner,
     shell: Shell,
     state: State,
@@ -93,44 +105,38 @@ impl Tab {
         let source = Arc::new(source);
         Self {
             state: State::Normal,
-            view: SourceView::new(source.clone(), &runner),
             shell: Shell::new(source.init_sql()),
+            view: SourceView::new(source, &runner),
             spinner: Spinner::new(),
             runner,
-            source,
         }
     }
 
     pub fn draw(&mut self, c: &mut Canvas, buf: &mut GridBuffer) -> bool {
         let status_line = c.reserve_btm(1);
+        let state_line = match &self.state {
+            State::Normal | State::Description(_) => c.reserve_btm(0),
+            State::Shell(_) | State::Nav(_) => c.reserve_btm(1),
+        };
 
-        // Draw state specific
-        match &mut self.state {
-            State::Normal => {}
-            State::Description(_) => {}
-            State::Shell(_) => self.shell.draw(c),
-            State::Nav(nav) => nav.draw(c),
-        }
-
-        // Draw view
+        // Tick
         let view: &mut dyn View = match &mut self.state {
-            State::Shell(Some(view)) => view,
+            State::Shell(view) => view,
             State::Description(desrc) => desrc,
             _ => &mut self.view,
         };
-        let ViewUI {
+        let ViewState {
             loading,
             streaming,
             err,
             frame,
             grid,
-        } = view.ui();
+        } = view.tick();
 
-        let err = err.map(ToString::to_string); // TODO borrow
         let spinner = self.spinner.state(loading.is_some());
 
         // Print error message
-        if let Some(err) = err {
+        if let Some(err) = &err {
             for line in err.lines().rev() {
                 c.btm().draw(line, style::error());
             }
@@ -215,9 +221,21 @@ impl Tab {
             l.rdraw(name, style::primary());
             l.rdraw(" ", style::primary());
         }
-        if let Some(path) = &self.source.display_path() {
+        if let Some(path) = &self.view.source.display_path() {
             l.draw(path, style::progress());
         }
+
+        // Draw state specific
+        c.consume(state_line);
+        match &mut self.state {
+            State::Normal | State::Description(_) => {}
+            State::Shell(v) => {
+                self.shell
+                    .draw(c, v.loader.is_loading().is_some(), v.load_error.is_some())
+            }
+            State::Nav(nav) => nav.draw(c),
+        }
+
         loading.is_some()
     }
 
@@ -225,13 +243,13 @@ impl Tab {
         match &mut self.state {
             State::Normal => match (self.grid().on_key(event), event.code) {
                 (OnKey::Pass, code) => match code {
-                    Key::Char('$') => self.state = State::Shell(None),
+                    Key::Char('$') => self.state = State::Shell(self.view.take()),
                     Key::Char('g') => {
                         self.state = State::Nav(Navigator::new(self.grid().nav.clone()))
                     }
                     Key::Char('d') => {
                         self.state = State::Description(DescriberView::new(
-                            self.source.clone(),
+                            self.view.source.clone(),
                             &self.runner,
                         ))
                     }
@@ -242,7 +260,7 @@ impl Tab {
             },
             State::Description(_) => match (self.grid().on_key(event), event.code) {
                 (OnKey::Pass, code) => match code {
-                    Key::Char('$') => self.state = State::Shell(None),
+                    Key::Char('$') => self.state = State::Shell(self.view.take()),
                     Key::Char('g') => {
                         self.state = State::Nav(Navigator::new(self.grid().nav.clone()))
                     }
@@ -255,21 +273,20 @@ impl Tab {
             State::Shell(view) => {
                 let (result, new_sql, apply) = self.shell.on_key(event);
                 if let Some(sql) = new_sql {
-                    let source = self.source.query(sql);
-                    match view {
-                        Some(v) => {
-                            v.set_source(Arc::new(source), &self.runner);
-                        }
-                        None => *view = Some(SourceView::new(Arc::new(source), &self.runner)),
+                    if view.source.init_sql() != sql {
+                        view.set_source(Arc::new(view.source.query(sql.into())), &self.runner);
                     }
                 }
                 if apply {
-                    if let Some(new) = view.take() {
-                        self.view = new;
+                    if view.load_error.is_none()
+                        && view.loader.is_loading().is_none()
+                        && !view.frame.is_loading()
+                        && view.frame.err().is_none()
+                    {
+                        std::mem::swap(&mut self.view, view);
+                        self.state = State::Normal
                     }
-                }
-                // TODO
-                if OnKey::Quit == result {
+                } else if OnKey::Quit == result {
                     self.state = State::Normal
                 }
             }
@@ -286,7 +303,7 @@ impl Tab {
 
     pub fn grid(&mut self) -> &mut Grid {
         match &mut self.state {
-            State::Shell(Some(view)) => &mut view.grid,
+            State::Shell(view) => &mut view.grid,
             State::Description(desrc) => &mut desrc.grid,
             _ => &mut self.view.grid,
         }

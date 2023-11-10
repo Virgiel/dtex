@@ -1,52 +1,44 @@
 use reedline::LineBuffer;
 
-struct HistoryBuffer<T, const N: usize> {
-    ring: [T; N],
-    head: usize,
-    filled: bool,
+struct History<T, const N: usize> {
+    buf: Vec<T>,
 }
 
-impl<T: Default, const N: usize> HistoryBuffer<T, N> {
+impl<T: Default + Eq, const N: usize> History<T, N> {
     pub fn new() -> Self {
         Self {
-            ring: std::array::from_fn(|_| T::default()),
-            head: 0,
-            filled: false,
+            buf: Vec::with_capacity(N),
         }
     }
 
     pub fn push(&mut self, item: T) {
-        self.ring[self.head] = item;
-        if self.head + 1 == self.ring.len() {
-            self.filled = true;
+        if let Some(pos) = self.buf.iter().position(|it| it == &item) {
+            self.buf.remove(pos);
         }
-        self.head = (self.head + 1) % self.ring.len();
+        if self.buf.len() == N {
+            self.buf.pop();
+        }
+        self.buf.insert(0, item);
     }
 
     pub fn get(&self, idx: usize) -> &T {
-        assert!(idx <= self.ring.len() && self.len() > 0);
-        let pos = (self.ring.len() + self.head - idx - 1) % self.ring.len();
-        &self.ring[pos]
+        &self.buf[idx]
     }
 
     pub fn len(&self) -> usize {
-        if self.filled {
-            self.ring.len()
-        } else {
-            self.head
-        }
+        self.buf.len()
     }
 }
 
 pub struct Prompt<const H: usize> {
-    history: HistoryBuffer<String, H>,
+    history: History<String, H>,
     pos: Option<usize>,
     buffer: LineBuffer,
 }
 
 impl<const H: usize> Prompt<H> {
     pub fn new(init: &str) -> Self {
-        let mut history = HistoryBuffer::new();
+        let mut history = History::new();
         if !init.trim().is_empty() {
             history.push(init.into())
         }

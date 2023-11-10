@@ -22,6 +22,7 @@ struct SizeStat {
 
 /// Size column based on previous observed length and constraints
 /// Prevent column size from flickering on scroll and use all available space
+#[derive(Clone)]
 pub struct Sizer {
     cols: Vec<(SizeStat, Constraint)>,
     fit_content: bool,

@@ -96,7 +96,7 @@ impl App {
     }
 
     pub fn add_tab(&mut self, tab: Tab) {
-        if let Some(path) = tab.source.path() {
+        if let Some(path) = tab.view.source.path() {
             self.debouncer
                 .watcher()
                 .watch(path, notify::RecursiveMode::NonRecursive)
@@ -117,8 +117,9 @@ impl App {
             while remaining_width > cols.len() {
                 if let Some(off) = coll_off_iter.next() {
                     let tab = &self.tabs[off];
-                    remaining_width = remaining_width.saturating_sub(tab.source.name().width());
-                    cols.push((off, tab.source.name()));
+                    remaining_width =
+                        remaining_width.saturating_sub(tab.view.source.name().width());
+                    cols.push((off, tab.view.source.name()));
                 } else {
                     break;
                 }
@@ -180,7 +181,7 @@ impl App {
                     if pass {
                         if let Some(tab) = self.tabs.get_mut(self.nav.c_col()) {
                             if tab.on_key(&event) {
-                                if let Some(path) = tab.source.path() {
+                                if let Some(path) = tab.view.source.path() {
                                     self.debouncer.watcher().unwatch(path).unwrap();
                                 }
                                 self.tabs.remove(self.nav.c_col());
@@ -200,7 +201,7 @@ impl App {
                                     if let Some(_tab) = self
                                         .tabs
                                         .iter_mut()
-                                        .find(|t| t.source.path() == Some(path.as_path()))
+                                        .find(|t| t.view.source.path() == Some(path.as_path()))
                                     {
 
                                         //tab.set_source(Source::from_path(path)) TODO
@@ -218,7 +219,7 @@ impl App {
     }
 }
 
-#[derive(PartialEq, Eq)]
+#[derive(PartialEq, Eq, Debug)]
 pub enum OnKey {
     // Exit current state
     Quit,

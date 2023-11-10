@@ -18,12 +18,14 @@ pub mod nav;
 mod projection;
 mod sizer;
 
+#[derive(Clone)]
 enum State {
     Normal,
     Size,
     Projection,
 }
 
+#[derive(Clone)]
 pub struct Grid {
     projection: Projection,
     pub nav: Nav,

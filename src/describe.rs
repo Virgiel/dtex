@@ -6,7 +6,7 @@ use crate::{
     grid::{Frame, Grid},
     source::{DataFrame, Source},
     task::{DuckTask, Runner},
-    view::{View, ViewUI},
+    view::{View, ViewState},
 };
 
 pub struct DescriberView {
@@ -34,22 +34,20 @@ impl DescriberView {
 }
 
 impl View for DescriberView {
-    fn ui(&mut self) -> ViewUI {
-        if let Some(task) = &mut self.task {
-            match task.tick() {
-                Some(Ok(df)) => {
-                    self.description = df;
-                    self.task = None;
-                }
-                Some(Err(it)) => {
-                    self.error = Some(it.0);
-                    self.task = None;
-                }
-                None => {}
+    fn tick(&mut self) -> ViewState {
+        match self.task.as_mut().and_then(|t| t.tick()) {
+            Some(Ok(df)) => {
+                self.description = df;
+                self.task = None;
             }
+            Some(Err(it)) => {
+                self.error = Some(it.0);
+                self.task = None;
+            }
+            None => {}
         }
 
-        ViewUI {
+        ViewState {
             loading: self.task.as_ref().map(|t| ("describe", t.progress())),
             streaming: false,
             frame: &self.description,

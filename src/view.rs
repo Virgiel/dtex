@@ -1,6 +1,6 @@
 use crate::grid::{Frame, Grid};
 
-pub struct ViewUI<'a> {
+pub struct ViewState<'a> {
     pub loading: Option<(&'static str, f64)>,
     pub streaming: bool,
     pub frame: &'a dyn Frame,
@@ -9,5 +9,5 @@ pub struct ViewUI<'a> {
 }
 
 pub trait View {
-    fn ui(&mut self) -> ViewUI;
+    fn tick(&mut self) -> ViewState;
 }

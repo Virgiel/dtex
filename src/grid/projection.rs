@@ -6,6 +6,7 @@ pub enum Cmd {
 }
 
 /// Column projection
+#[derive(Clone)]
 pub struct Projection {
     cols: Vec<usize>,
     nb_col: usize,

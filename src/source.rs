@@ -65,6 +65,10 @@ impl StreamingFrame {
         }
     }
 
+    pub fn take(&self) -> Self {
+        Self::Loaded(self.df().clone())
+    }
+
     pub fn tick(&mut self) {
         if let StreamingFrame::Streaming {
             task,
@@ -214,16 +218,13 @@ impl FrameLoader {
 enum Kind {
     Empty,
     Eager(DataFrame),
-    File {
-        path: PathBuf,
-        display_path: String,
-    },
+    File { path: PathBuf, display_path: String },
 }
 
 pub struct Source {
     name: String,
     kind: Kind,
-    sql: String
+    sql: String,
 }
 
 impl Source {
@@ -231,7 +232,7 @@ impl Source {
         Self {
             name,
             kind: Kind::Empty,
-            sql: String::new()
+            sql: String::new(),
         }
     }
 
@@ -239,7 +240,7 @@ impl Source {
         Self {
             name,
             kind: Kind::Eager(df),
-            sql: "FROM current SELECT *".into()
+            sql: "FROM current SELECT *".into(),
         }
     }
 
@@ -255,7 +256,7 @@ impl Source {
                 display_path: path.to_string_lossy().to_string(),
                 path: path.canonicalize().unwrap_or(path.to_path_buf()),
             },
-            sql: "FROM current SELECT *".into()
+            sql: "FROM current SELECT *".into(),
         }
     }
 
@@ -263,7 +264,7 @@ impl Source {
         Self {
             name: self.name.clone(),
             kind: self.kind.clone(),
-            sql
+            sql,
         }
     }
 
@@ -360,7 +361,7 @@ impl Source {
         if self.sql.is_empty() {
             match self.kind {
                 Kind::Empty => "",
-                Kind::Eager(_) |  Kind::File { .. } => "SELECT * FROM current"
+                Kind::Eager(_) | Kind::File { .. } => "SELECT * FROM current",
             }
         } else {
             &self.sql
