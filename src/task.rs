@@ -6,7 +6,10 @@ use std::{
     thread::Thread,
 };
 
-use crate::duckdb::{ConnCtx, Connection};
+use crate::{
+    duckdb::{ConnCtx, Connection},
+    Source,
+};
 
 #[derive(Clone)]
 pub struct Runner(Thread);
@@ -19,20 +22,19 @@ impl Runner {
     /// Start a new duckdb background task
     pub fn duckdb<T: Send + 'static>(
         &self,
-        task: impl FnOnce(Connection) -> crate::error::Result<T> + Send + 'static,
+        source: Arc<Source>,
+        task: impl FnOnce(Arc<Source>, Connection) -> crate::error::Result<T> + Send + 'static,
     ) -> DuckTask<T> {
         let (sender, receiver) = oneshot::channel();
         let wake = self.0.clone();
         let done = Arc::new(AtomicBool::new(false));
 
-        let mem = Connection::mem().expect("TODO");
-        mem.execute("SET enable_progress_bar=true; SET enable_progress_bar_print=false;")
-            .expect("TODO");
-        let ctx = mem.ctx();
+        let con = source.conn().expect("TODO");
+        let ctx = con.ctx();
         {
             let done = done.clone();
             std::thread::spawn(move || {
-                let result = task(mem);
+                let result = task(source, con);
                 done.store(true, Ordering::Relaxed);
                 if sender.send(result).is_ok() {
                     // Only succeeded if the result is expected

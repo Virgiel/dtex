@@ -70,6 +70,9 @@ impl Drop for DB {
     }
 }
 
+unsafe impl Send for DB {}
+unsafe impl Sync for DB {}
+
 pub struct Chunks {
     _handle: Arc<Con>,
     result: duckdb_result,
@@ -139,6 +142,33 @@ impl Drop for Chunks {
     }
 }
 
+#[derive(Clone)]
+pub struct DuckDb {
+    _db: Arc<DB>,
+}
+
+impl DuckDb {
+    /// Open a in memory database
+    pub fn mem() -> Result<Self> {
+        let db = DB::tmp()?;
+        Ok(Self { _db: Arc::new(db) })
+    }
+
+    pub fn conn(&self) -> Result<Connection> {
+        let mut con: duckdb_connection = std::ptr::null_mut();
+        unsafe {
+            if duckdb_connect(self._db.db, &mut con) != DuckDBSuccess {
+                duckdb_disconnect(&mut con);
+                return Err(Error("Unknown connect error".into()));
+            }
+        }
+        Ok(Connection(Arc::new(Con {
+            _db: self._db.clone(),
+            con,
+        })))
+    }
+}
+
 struct Con {
     _db: Arc<DB>,
     con: duckdb_connection,
@@ -168,22 +198,6 @@ impl ConnCtx {
 pub struct Connection(Arc<Con>);
 
 impl Connection {
-    /// Open a in memory database
-    pub fn mem() -> Result<Self> {
-        let db = DB::tmp()?;
-        let mut con: duckdb_connection = std::ptr::null_mut();
-        unsafe {
-            if duckdb_connect(db.db, &mut con) != DuckDBSuccess {
-                duckdb_disconnect(&mut con);
-                return Err(Error("Unknown connect error".into()));
-            }
-        }
-        Ok(Self(Arc::new(Con {
-            _db: Arc::new(db),
-            con,
-        })))
-    }
-
     pub fn ctx(&self) -> ConnCtx {
         ConnCtx(self.0.clone())
     }

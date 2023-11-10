@@ -13,7 +13,7 @@ use arrow::{
 
 use crate::{
     array_to_iter,
-    duckdb::{Chunks, Connection},
+    duckdb::{Chunks, Connection, DuckDb},
     error::Result,
     fmt::{Col, ColBuilder, GridBuffer},
     task::{Ctx, DuckTask, Runner, Task},
@@ -178,7 +178,7 @@ impl FrameLoader {
             Self::Finished(Some(StreamingFrame::full(df)))
         } else {
             let _runner = runner.clone();
-            Self::Pending(runner.duckdb(move |con| {
+            Self::Pending(runner.duckdb(source, move |source, con| {
                 let mut chunks = source.load(con)?;
                 let preload = chunks
                     .next()
@@ -225,55 +225,19 @@ pub struct Source {
     name: String,
     kind: Kind,
     sql: String,
+    db: DuckDb,
 }
 
 impl Source {
-    pub fn empty(name: String) -> Self {
-        Self {
-            name,
-            kind: Kind::Empty,
-            sql: String::new(),
-        }
-    }
+    fn new(name: String, kind: Kind, sql: String) -> Result<Self> {
+        let db = DuckDb::mem()?;
+        let conn = db.conn()?;
+        conn.execute("SET enable_progress_bar=true; SET enable_progress_bar_print=false;")?;
 
-    pub fn from_mem(name: String, df: DataFrame) -> Self {
-        Self {
-            name,
-            kind: Kind::Eager(df),
-            sql: "FROM current SELECT *".into(),
-        }
-    }
-
-    pub fn from_path(path: &Path) -> Self {
-        Self {
-            name: path
-                .file_stem()
-                .unwrap_or_default()
-                .to_string_lossy()
-                .to_string(),
-
-            kind: Kind::File {
-                display_path: path.to_string_lossy().to_string(),
-                path: path.canonicalize().unwrap_or(path.to_path_buf()),
-            },
-            sql: "FROM current SELECT *".into(),
-        }
-    }
-
-    pub fn query(&self, sql: String) -> Self {
-        Self {
-            name: self.name.clone(),
-            kind: self.kind.clone(),
-            sql,
-        }
-    }
-
-    fn init(&self, con: Connection) -> Result<Connection> {
-        Ok(match &self.kind {
-            Kind::Empty => con,
+        match &kind {
+            Kind::Empty => {}
             Kind::Eager(df) => {
-                con.bind(df.clone())?;
-                con
+                conn.bind(df.clone())?;
             }
             Kind::File { display_path, .. } => {
                 if display_path.ends_with(".sql") {
@@ -285,13 +249,13 @@ impl Source {
 
                     match queries.as_slice() {
                         [] => {
-                            con.execute("CREATE TABLE current (i INTEGER)")?;
+                            conn.execute("CREATE TABLE current (i INTEGER)")?; // TODO what to do as default ?
                         }
                         [content @ .., tail] => {
                             for q in content {
-                                con.execute(q)?;
+                                conn.execute(q)?;
                             }
-                            con.execute(&format!("CREATE VIEW current AS {tail}"))?;
+                            conn.execute(&format!("CREATE VIEW current AS {tail}"))?;
                         }
                     }
                 } else {
@@ -302,16 +266,54 @@ impl Source {
                         .iter()
                         .any(|s| path.ends_with(s))
                     {
-                        con.execute(&format!(
+                        conn.execute(&format!(
                             "CREATE VIEW current AS SELECT * FROM '{display_path}'"
                         ))?;
                     } else {
                         return Err("Unsupported file format".into());
                     }
                 }
-                con
             }
+        }
+
+        Ok(Self {
+            name,
+            kind,
+            sql,
+            db,
         })
+    }
+
+    pub fn empty(name: String) -> Self {
+        Self::new(name, Kind::Empty, String::new()).unwrap()
+    }
+
+    pub fn from_mem(name: String, df: DataFrame) -> Self {
+        Self::new(name, Kind::Eager(df), "FROM current SELECT *".into()).unwrap()
+    }
+
+    pub fn from_path(path: &Path) -> Self {
+        Self::new(
+            path.file_stem()
+                .unwrap_or_default()
+                .to_string_lossy()
+                .to_string(),
+            Kind::File {
+                display_path: path.to_string_lossy().to_string(),
+                path: path.canonicalize().unwrap_or(path.to_path_buf()),
+            },
+            "FROM current SELECT *".into(),
+        )
+        .unwrap()
+    }
+
+    pub fn query(&self, sql: String) -> Self {
+        Self {
+            name: self.name.clone(),
+            kind: self.kind.clone(),
+            sql,
+            db: self.db.clone(),
+        }
     }
 
     pub fn name(&self) -> &str {
@@ -341,6 +343,10 @@ impl Source {
         }
     }
 
+    pub fn conn(&self) -> Result<Connection> {
+        Ok(self.db.conn()?)
+    }
+
     pub fn describe(&self, con: Connection) -> Result<Chunks> {
         // TODO handle empty
         if let Kind::Empty = self.kind {
@@ -349,12 +355,12 @@ impl Source {
             }
         }
         let sql = format!("SUMMARIZE {}", self.sql);
-        Ok(self.init(con)?.query(&sql)?)
+        Ok(con.query(&sql)?)
     }
 
     pub fn load(&self, con: Connection) -> Result<Chunks> {
         let sql = self.init_sql();
-        Ok(self.init(con)?.query(sql)?)
+        Ok(con.query(sql)?)
     }
 
     pub fn init_sql(&self) -> &str {

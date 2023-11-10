@@ -22,7 +22,7 @@ impl DescriberView {
             grid: Grid::new(),
             description: Description(DataFrame::empty()),
             error: None,
-            task: Some(runner.duckdb(move |con| {
+            task: Some(runner.duckdb(source, move |source, con| {
                 let df: Result<DataFrame> = source
                     .describe(con)?
                     .map(|d| d.map_err(|e| e.into()))
