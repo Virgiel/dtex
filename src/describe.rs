@@ -1,58 +1,69 @@
 use std::sync::Arc;
 
 use crate::{
-    duckdb::Connection,
     error::Result,
     fmt::{Col, GridBuffer},
-    grid::Frame,
+    grid::{Frame, Grid},
     source::{DataFrame, Source},
     task::{DuckTask, Runner},
-    StrError,
+    view::{View, ViewUI},
 };
 
-pub enum Describer {
-    Pending(DuckTask<Description>),
-    Ready(Description),
-    Error(StrError),
+pub struct DescriberView {
+    task: Option<DuckTask<Description>>,
+    description: Description,
+    error: Option<String>,
+    pub grid: Grid,
 }
 
-impl Describer {
-    pub fn describe(source: Arc<Source>, runner: &Runner) -> Self {
-        Self::Pending(runner.duckdb(move |ctx| describe(ctx, &source)))
+impl DescriberView {
+    pub fn new(source: Arc<Source>, runner: &Runner) -> Self {
+        Self {
+            grid: Grid::new(),
+            description: Description(DataFrame::empty()),
+            error: None,
+            task: Some(runner.duckdb(move |con| {
+                let df: Result<DataFrame> = source
+                    .describe(con)?
+                    .map(|d| d.map_err(|e| e.into()))
+                    .collect();
+                Ok(Description(df?))
+            })),
+        }
     }
+}
 
-    pub fn tick(&mut self) {
-        match self {
-            Describer::Pending(task) => match task.tick() {
-                Some(Ok(df)) => *self = Self::Ready(df),
-                Some(Err(it)) => *self = Self::Error(it),
+impl View for DescriberView {
+    fn ui(&mut self) -> ViewUI {
+        if let Some(task) = &mut self.task {
+            match task.tick() {
+                Some(Ok(df)) => {
+                    self.description = df;
+                    self.task = None;
+                }
+                Some(Err(it)) => {
+                    self.error = Some(it.0);
+                    self.task = None;
+                }
                 None => {}
-            },
-            Describer::Ready(_) | Describer::Error(_) => {}
+            }
         }
-    }
 
-    pub fn df(&self) -> Option<Result<&Description>> {
-        match self {
-            Describer::Pending(_) => None,
-            Describer::Ready(df) => Some(Ok(df)),
-            Describer::Error(e) => Some(Err(e.clone())),
-        }
-    }
-
-    pub fn is_loading(&self) -> Option<f64> {
-        match self {
-            Describer::Pending(task) => Some(task.progress()),
-            Describer::Ready(_) | Describer::Error(_) => None,
+        ViewUI {
+            loading: self.task.as_ref().map(|t| ("describe", t.progress())),
+            streaming: false,
+            frame: &self.description,
+            grid: &mut self.grid,
+            err: self.error.as_deref(),
         }
     }
 }
 
-pub struct Description(DataFrame);
+struct Description(DataFrame);
 
 impl Frame for Description {
     fn nb_col(&self) -> usize {
-        self.0.num_columns() - 1
+        self.0.num_columns().saturating_sub(1)
     }
 
     fn nb_row(&self) -> usize {
@@ -70,12 +81,4 @@ impl Frame for Description {
     fn col_iter(&self, buf: &mut GridBuffer, idx: usize, skip: usize, take: usize) -> Col {
         self.0.iter(buf, idx + 1, skip, take)
     }
-}
-
-pub fn describe(con: Connection, source: &Source) -> crate::error::Result<Description> {
-    let df: Result<DataFrame> = source
-        .describe(con)?
-        .map(|d| d.map_err(|e| e.into()))
-        .collect();
-    Ok(Description(df?))
 }

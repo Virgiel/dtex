@@ -114,6 +114,14 @@ impl StreamingFrame {
         }
     }
 
+    pub fn err(&self) -> Option<&str> {
+        if let StreamingFrame::Error { error, .. } = &self {
+            Some(error)
+        } else {
+            None
+        }
+    }
+
     pub fn is_streaming(&self) -> bool {
         !matches!(self, StreamingFrame::Loaded(_))
     }
@@ -202,13 +210,10 @@ impl FrameLoader {
     }
 }
 
+#[derive(Clone)]
 enum Kind {
     Empty,
     Eager(DataFrame),
-    Shell {
-        current: Option<Arc<Source>>,
-        sql: String,
-    },
     File {
         path: PathBuf,
         display_path: String,
@@ -218,13 +223,15 @@ enum Kind {
 pub struct Source {
     name: String,
     kind: Kind,
+    sql: String
 }
 
 impl Source {
-    pub fn empty() -> Self {
+    pub fn empty(name: String) -> Self {
         Self {
-            name: "#".into(),
+            name,
             kind: Kind::Empty,
+            sql: String::new()
         }
     }
 
@@ -232,6 +239,7 @@ impl Source {
         Self {
             name,
             kind: Kind::Eager(df),
+            sql: "FROM current SELECT *".into()
         }
     }
 
@@ -247,16 +255,15 @@ impl Source {
                 display_path: path.to_string_lossy().to_string(),
                 path: path.canonicalize().unwrap_or(path.to_path_buf()),
             },
+            sql: "FROM current SELECT *".into()
         }
     }
 
-    pub fn from_sql(sql: &str, current: Option<Arc<Self>>) -> Self {
+    pub fn query(&self, sql: String) -> Self {
         Self {
-            name: "shell".into(),
-            kind: Kind::Shell {
-                sql: sql.to_string(),
-                current,
-            },
+            name: self.name.clone(),
+            kind: self.kind.clone(),
+            sql
         }
     }
 
@@ -267,10 +274,6 @@ impl Source {
                 con.bind(df.clone())?;
                 con
             }
-            Kind::Shell { current, .. } => match current {
-                Some(it) => it.init(con)?,
-                None => con,
-            },
             Kind::File { display_path, .. } => {
                 if display_path.ends_with(".sql") {
                     let content = std::fs::read_to_string(display_path)?;
@@ -310,28 +313,20 @@ impl Source {
         })
     }
 
-    pub fn sql(&self) -> &str {
-        match &self.kind {
-            Kind::Empty => "",
-            Kind::Shell { sql, .. } => sql,
-            Kind::Eager { .. } | Kind::File { .. } => "FROM current SELECT *",
-        }
-    }
-
     pub fn name(&self) -> &str {
         &self.name
     }
 
     pub fn path(&self) -> Option<&Path> {
         match &self.kind {
-            Kind::Empty | Kind::Eager { .. } | Kind::Shell { .. } => None,
+            Kind::Empty | Kind::Eager { .. } => None,
             Kind::File { path, .. } => Some(path),
         }
     }
 
     pub fn display_path(&self) -> Option<&str> {
         match &self.kind {
-            Kind::Empty | Kind::Eager { .. } | Kind::Shell { .. } => None,
+            Kind::Empty | Kind::Eager { .. } => None,
             Kind::File { display_path, .. } => Some(display_path),
         }
     }
@@ -341,26 +336,35 @@ impl Source {
         match &self.kind {
             Kind::Empty => Some(DataFrame::empty()),
             Kind::Eager(df) => Some(df.clone()),
-            Kind::File { .. } | Kind::Shell { .. } => None,
+            Kind::File { .. } => None,
         }
     }
 
     pub fn describe(&self, con: Connection) -> Result<Chunks> {
-        let sql = match &self.kind {
-            Kind::Empty => return Err("Nothing to describe".into()),
-            Kind::Shell { sql, .. } => format!("SUMMARIZE {sql}"),
-            Kind::Eager { .. } | Kind::File { .. } => "SUMMARIZE SELECT * FROM current".into(),
-        };
+        // TODO handle empty
+        if let Kind::Empty = self.kind {
+            if self.sql.is_empty() {
+                return Err("Nothing to summarize".into());
+            }
+        }
+        let sql = format!("SUMMARIZE {}", self.sql);
         Ok(self.init(con)?.query(&sql)?)
     }
 
     pub fn load(&self, con: Connection) -> Result<Chunks> {
-        let sql = match &self.kind {
-            Kind::Empty => return Err("Nothing to load".into()),
-            Kind::Shell { sql, .. } => sql,
-            Kind::Eager { .. } | Kind::File { .. } => "FROM current SELECT *",
-        };
+        let sql = self.init_sql();
         Ok(self.init(con)?.query(sql)?)
+    }
+
+    pub fn init_sql(&self) -> &str {
+        if self.sql.is_empty() {
+            match self.kind {
+                Kind::Empty => "",
+                Kind::Eager(_) |  Kind::File { .. } => "SELECT * FROM current"
+            }
+        } else {
+            &self.sql
+        }
     }
 }
 

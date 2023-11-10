@@ -193,7 +193,7 @@ impl Connection {
         assert_eq!(frame.0.batchs.len(), 1, "TODO concat array");
         let array = &frame.0.batchs[0];
         let schema = array.schema();
-        let array = StructArray::try_from(array.clone()).unwrap();
+        let array = StructArray::from(array.clone());
         let schema = FFI_ArrowSchema::try_from(schema.as_ref()).unwrap();
         let array = FFI_ArrowArray::new(&array.to_data());
         let schema = Box::leak(Box::new(schema));

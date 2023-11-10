@@ -18,6 +18,6 @@ fn main() {
         args.files
             .into_iter()
             .map(|p| dtex::Source::from_path(&p))
-            .chain(args.sql.map(|s| dtex::Source::from_sql(&s, None))),
+            .chain(args.sql.map(|s| dtex::Source::empty("shell".into()).query(s))),
     );
 }

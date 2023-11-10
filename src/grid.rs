@@ -115,7 +115,7 @@ impl Grid {
         OnKey::Continue
     }
 
-    pub fn draw(&mut self, c: &mut Canvas, df: &dyn Frame, buf: &mut GridBuffer) -> GridUI {
+    pub fn draw(&mut self, c: &mut Canvas, buf: &mut GridBuffer, df: &dyn Frame) -> GridUI {
         let nb_col = df.nb_col();
         let nb_row = df.nb_row();
         self.projection.set_nb_cols(nb_col);

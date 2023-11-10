@@ -37,6 +37,7 @@ mod spinner;
 mod style;
 mod tab;
 mod task;
+mod view;
 
 pub fn run(sources: impl Iterator<Item = Source>) {
     let (receiver, watcher, runner) = event_listener();
@@ -45,12 +46,17 @@ pub fn run(sources: impl Iterator<Item = Source>) {
         app.add_tab(Tab::open(runner.clone(), source));
     }
     if app.tabs.is_empty() {
-        app.add_tab(Tab::open(runner, Source::empty()));
+        app.add_tab(Tab::open(runner, Source::empty("#".into())));
     }
     let mut terminal = Terminal::new(io::stdout()).unwrap();
     loop {
-        terminal.draw(|c| app.draw(c)).unwrap();
-        let mut event = if app.is_loading() {
+        let mut is_loading = false;
+        terminal
+            .draw(|c| {
+                is_loading = app.draw(c);
+            })
+            .unwrap();
+        let mut event = if is_loading {
             match receiver.recv_timeout(Duration::from_millis(100)) {
                 Ok(e) => Some(e),
                 Err(err) => match err {
@@ -99,7 +105,7 @@ impl App {
         self.tabs.push(tab);
     }
 
-    pub fn draw(&mut self, c: &mut Canvas) {
+    pub fn draw(&mut self, c: &mut Canvas) -> bool {
         self.buf.new_frame(c.width());
         let mut coll_off_iter = self.nav.col_iter(self.tabs.len());
         if self.tabs.len() == 1 {
@@ -139,6 +145,8 @@ impl App {
                 line.draw(" ", style::separator());
             }
             self.tabs[self.nav.c_col()].draw(c, &mut self.buf)
+        } else {
+            false
         }
     }
 
@@ -189,12 +197,13 @@ impl App {
                             // TODO perf with many tabs
                             if e.kind.is_modify() {
                                 for path in &e.paths {
-                                    if let Some(tab) = self
+                                    if let Some(_tab) = self
                                         .tabs
                                         .iter_mut()
                                         .find(|t| t.source.path() == Some(path.as_path()))
                                     {
-                                        tab.set_source(Source::from_path(path))
+
+                                        //tab.set_source(Source::from_path(path)) TODO
                                     }
                                 }
                             }
@@ -206,10 +215,6 @@ impl App {
             event::Event::Task => {}
         }
         self.tabs.is_empty()
-    }
-
-    fn is_loading(&self) -> bool {
-        self.tabs[self.nav.c_col()].is_loading().is_some()
     }
 }
 
