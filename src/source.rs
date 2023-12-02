@@ -10,6 +10,7 @@ use arrow::{
     datatypes::{Schema, SchemaRef},
     record_batch::RecordBatch,
 };
+use libduckdb_sys::duckdb_query_progress_type;
 
 use crate::{
     array_to_iter,
@@ -206,7 +207,7 @@ impl FrameLoader {
         }
     }
 
-    pub fn is_loading(&self) -> Option<f64> {
+    pub fn is_loading(&self) -> Option<duckdb_query_progress_type> {
         match self {
             FrameLoader::Finished(_) => None,
             FrameLoader::Pending(task) => Some(task.progress()),

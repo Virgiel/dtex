@@ -22,7 +22,7 @@ use libduckdb_sys::{
     duckdb_pending_state_DUCKDB_PENDING_RESULT_READY, duckdb_prepare, duckdb_prepare_error,
     duckdb_prepared_statement, duckdb_query, duckdb_query_progress, duckdb_result,
     duckdb_result_arrow_array, duckdb_result_arrow_schema, duckdb_result_error,
-    duckdb_result_get_chunk, duckdb_result_is_streaming, duckdb_stream_fetch_chunk, DuckDBSuccess,
+    duckdb_result_get_chunk, duckdb_result_is_streaming, duckdb_stream_fetch_chunk, DuckDBSuccess, duckdb_query_progress_type,
 };
 
 use crate::DataFrame;
@@ -186,7 +186,7 @@ impl Drop for Con {
 pub struct ConnCtx(Arc<Con>);
 
 impl ConnCtx {
-    pub fn progress(&self) -> f64 {
+    pub fn progress(&self) -> duckdb_query_progress_type {
         unsafe { duckdb_query_progress(self.0.con as *mut _) }
     }
 

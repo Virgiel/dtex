@@ -6,6 +6,8 @@ use std::{
     thread::Thread,
 };
 
+use libduckdb_sys::duckdb_query_progress_type;
+
 use crate::{
     duckdb::{ConnCtx, Connection},
     Source,
@@ -147,7 +149,7 @@ pub struct DuckTask<T> {
 }
 
 impl<T> DuckTask<T> {
-    pub fn progress(&self) -> f64 {
+    pub fn progress(&self) -> duckdb_query_progress_type {
         self.ctx.progress()
     }
 

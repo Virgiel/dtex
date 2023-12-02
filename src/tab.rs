@@ -1,5 +1,6 @@
 use std::sync::Arc;
 
+use libduckdb_sys::duckdb_query_progress_type;
 use tui::{
     crossterm::event::{KeyCode as Key, KeyEvent},
     none, Canvas,
@@ -80,7 +81,14 @@ impl View for SourceView {
             loading: if let Some(progress) = self.loader.is_loading() {
                 Some(("load", progress))
             } else if self.frame.is_loading() {
-                Some(("stream", -1.))
+                Some((
+                    "stream",
+                    duckdb_query_progress_type {
+                        percentage: -1.,
+                        rows_processed: 0,
+                        total_rows_to_process: 0,
+                    },
+                ))
             } else {
                 None
             },
@@ -149,11 +157,18 @@ impl Tab {
             if let Some((task, progress)) = loading {
                 // Loading bar
                 if spinner.is_some() {
+                    let msg = if progress.percentage > 0. {
+                        format!(
+                            "{task} - {}/{} {:>2.0}%",
+                            progress.rows_processed,
+                            progress.total_rows_to_process,
+                            progress.percentage
+                        )
+                    } else {
+                        format!("{task}")
+                    };
                     let pad_top = c.height().saturating_sub(1) / 2;
-                    let pad_left = c
-                        .width()
-                        .saturating_sub(task.len() + if progress > 0. { 8 } else { 0 })
-                        / 2;
+                    let pad_left = c.width().saturating_sub(msg.len()) / 2;
                     for _ in 0..pad_top {
                         c.line("", none());
                     }
@@ -161,11 +176,7 @@ impl Tab {
                     for _ in 0..pad_left {
                         line.draw(" ", none());
                     }
-                    if progress > 0. {
-                        line.draw(format_args!("{task} - {progress:>2.0}%"), style::progress());
-                    } else {
-                        line.draw(format_args!("{task}"), style::progress());
-                    }
+                    line.draw(msg, style::progress());
                 }
             } else {
                 // Empty
@@ -200,8 +211,16 @@ impl Tab {
         if let Some((task, progress)) = loading {
             if let Some(c) = spinner {
                 l.rdraw(format_args!("{c}"), style::progress());
-                if progress > 0. {
-                    l.rdraw(format_args!(" {progress:>2.0}%"), style::progress());
+                if progress.percentage > 0. {
+                    l.rdraw(
+                        format_args!(
+                            " {}/{} {:>2.0}%",
+                            progress.rows_processed,
+                            progress.total_rows_to_process,
+                            progress.percentage
+                        ),
+                        style::progress(),
+                    );
                 }
                 l.rdraw(format_args!(" {task}"), style::progress());
             }
